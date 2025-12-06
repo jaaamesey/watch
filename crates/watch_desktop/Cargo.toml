@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 chrono = "0.4.42"
+font8x8 = "0.3.1"
 minifb = "0.28.0"
 tokio = "1.48.0"
 watch_lib = { path = "../watch_lib" }

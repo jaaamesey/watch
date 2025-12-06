@@ -1,3 +1,4 @@
+use font8x8::{self, UnicodeFonts};
 use minifb;
 use watch_lib;
 
@@ -30,6 +31,17 @@ fn main() {
 
     set_pixel(&mut screen_buffer, 1, 1, 1);
     set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
+
+    let text_bitmap = render_text("BEPIS");
+    let text_width_bytes = text_bitmap.len() / 8;
+    for (byte_idx, byte) in text_bitmap.iter().enumerate() {
+        let x = (byte_idx % text_width_bytes) * 8;
+        let y = byte_idx / text_width_bytes;
+        let buffer_byte_index = y * (SCREEN_WIDTH as usize / 8) + (x / 8);
+        if buffer_byte_index < screen_buffer.len() {
+            screen_buffer[buffer_byte_index] |= *byte;
+        }
+    }
 
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
         let mut final_buffer: Vec<u32> = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize];
@@ -94,4 +106,23 @@ fn set_pixel(buffer: &mut [u8], x: u8, y: u8, color: u8) {
     } else {
         buffer[byte_index] &= !(1 << bit_index);
     }
+}
+
+// TODO: does this get optimised? could we do an iterator?
+fn render_text(str: &str) -> Vec<u8> {
+    let font = font8x8::unicode::BasicFonts::new();
+    let char_width = 8;
+    let buffer_width = str.len() * char_width;
+
+    // TODO: figure out how to do this without vec
+    let mut buffer = vec![0 as u8; buffer_width];
+
+    for (c_idx, char) in str.chars().enumerate() {
+        let char_buffer = font.get(char).unwrap_or_default();
+        for (rendered_byte_idx, rendered_byte) in char_buffer.iter().enumerate() {
+            buffer[c_idx * char_width + rendered_byte_idx] |= *rendered_byte;
+        }
+    }
+
+    return buffer;
 }
