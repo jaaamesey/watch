@@ -1,0 +1,9 @@
+# Ignore build artifacts for the entire workspace
+target/
+
+# Ignore editor/IDE specific files
+.vscode/
+
+# Operating System Files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,2 @@
+[workspace]
+members = ["crates/watch_lib", "crates/watch_desktop"]
