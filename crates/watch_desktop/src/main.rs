@@ -32,13 +32,19 @@ fn main() {
     set_pixel(&mut screen_buffer, 1, 1, 1);
     set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
 
-    let text_bitmap = render_text("BEPIS");
-    let text_width_bytes = text_bitmap.len() / 8;
+    let text_bitmap = render_text("some text ayy");
+    let x_transform = 108;
+    let y_transform = 0;
     for (byte_idx, byte) in text_bitmap.iter().enumerate() {
-        let x = (byte_idx % text_width_bytes) * 8;
-        let y = byte_idx / text_width_bytes;
-        let buffer_byte_index = y * (SCREEN_WIDTH as usize / 8) + (x / 8);
-        if buffer_byte_index < screen_buffer.len() {
+        let x = byte_idx;
+        let y = byte_idx % 8;
+        let buffer_byte_index = (x_transform / 8)
+            + ((y_transform / 8) * SCREEN_WIDTH as usize)
+            + y * (SCREEN_WIDTH as usize / 8)
+            + (x / 8);
+        if buffer_byte_index < screen_buffer.len()
+            && ((x / 8 + x_transform / 8) < SCREEN_WIDTH as usize / 8)
+        {
             screen_buffer[buffer_byte_index] |= *byte;
         }
     }
@@ -120,7 +126,7 @@ fn render_text(str: &str) -> Vec<u8> {
     for (c_idx, char) in str.chars().enumerate() {
         let char_buffer = font.get(char).unwrap_or_default();
         for (rendered_byte_idx, rendered_byte) in char_buffer.iter().enumerate() {
-            buffer[c_idx * char_width + rendered_byte_idx] |= *rendered_byte;
+            buffer[c_idx * char_width + rendered_byte_idx] |= rendered_byte.reverse_bits();
         }
     }
 
