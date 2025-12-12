@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use font8x8::{self, UnicodeFonts};
 use minifb;
 use watch_lib;
@@ -5,16 +7,91 @@ use watch_lib;
 const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
 
+struct Signal<T: Clone + Copy> {
+    value: Rc<RefCell<T>>,
+    listeners: Vec<Rc<RefCell<dyn FnMut(T)>>>,
+}
+
+impl<T: Copy> Signal<T> {
+    pub fn set(&mut self, value: T) {
+        *self.value.borrow_mut() = value;
+    }
+    pub fn derived<
+        Computation: Clone + Copy,
+        D0: Clone + Copy,
+        D1: Clone + Copy,
+        OD0: Observable<D0>,
+        OD1: Observable<D1>,
+    >(
+        deps: (&mut OD0, &mut OD1),
+        compute: &'static fn(D0, D1) -> Computation,
+    ) {
+        let ds = Rc::new(RefCell::new(DerivedSignal {
+            cache: Some(compute(deps.0.peek(), deps.1.peek())),
+            deps: (deps.0.peek(), deps.1.peek()),
+            compute: |d| compute(d.0, d.1),
+            listeners: Vec::new(),
+        }));
+        let ds_clone = ds.clone();
+        deps.0.subscribe(move |new| {
+            ds_clone.borrow_mut().deps.0 = new;
+            ds_clone.borrow_mut().recompute();
+        });
+        let ds_clone = ds.clone();
+        deps.1.subscribe(move |new| {
+            ds_clone.borrow_mut().deps.1 = new;
+            ds_clone.borrow_mut().recompute();
+        });
+    }
+}
+
+impl<T: Copy> Observable<T> for Signal<T> {
+    fn peek(&self) -> T {
+        *self.value.borrow()
+    }
+    fn subscribe<F: FnMut(T) + 'static>(&mut self, on_change: F) -> usize {
+        self.listeners.push(Rc::new(RefCell::new(on_change)));
+        self.listeners.len() - 1
+    }
+    fn unsubscribe(&mut self, id: usize) {
+        // *self.listeners[id].borrow_mut() = || {};
+    }
+}
+
+trait Observable<T> {
+    fn peek(&self) -> T;
+    fn subscribe<F: FnMut(T) + 'static>(&mut self, on_change: F) -> usize;
+    fn unsubscribe(&mut self, id: usize);
+}
+
+struct DerivedSignal<Derivation: Clone + Copy, Deps: Clone + Copy, F: Fn(Deps) -> Derivation> {
+    cache: Option<Derivation>,
+    deps: Deps,
+    compute: F,
+    listeners: Vec<Rc<RefCell<dyn FnMut(Derivation)>>>,
+}
+
+impl<Derivation: Clone + Copy, Deps: Clone + Copy, F: Fn(Deps) -> Derivation>
+    DerivedSignal<Derivation, Deps, F>
+{
+    pub fn recompute(&mut self) {
+        let prev = self.cache;
+        self.cache = Some((self.compute)(self.deps));
+    }
+}
+
+struct TextUIElement<'a> {
+    text: &'a Signal<&'a str>,
+}
+
+impl<'a> TextUIElement<'a> {
+    // pub fn new(text: &'a Signal<&'a str>) -> Self {
+    //     Self { text }
+    // }
+}
+
 fn main() {
     let mut screen_buffer = [0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8];
-    dbg!(&screen_buffer);
-    dbg!(watch_lib::add(1, 2));
-    // let mut count = 0;
-    // loop {
-    //     count += 1;
-    //     dbg!(count);
-    //     thread::sleep(Duration::from_secs(1));
-    // }
 
     let mut window = minifb::Window::new(
         "WATCH DEBUG SCREEN",
