@@ -34,7 +34,7 @@ fn main() {
 
     let font = font8x8::unicode::BasicFonts::new();
 
-    draw_text(&mut screen_buffer, &font, "ayy lmao", 0, 8, 0);
+    draw_text(&mut screen_buffer, &font, "ayy lmao", 1, 11, 0);
 
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
         let mut final_buffer: Vec<u32> = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize];
@@ -101,7 +101,6 @@ fn set_pixel(buffer: &mut [u8], x: u8, y: u8, color: u8) {
     }
 }
 
-// TODO: allow moving by pixel instead of by byte
 fn draw_text(
     buffer: &mut [u8],
     font: &font8x8::unicode::BasicFonts,
@@ -110,29 +109,29 @@ fn draw_text(
     y_transform: u8,
     color: u8,
 ) {
-    let x8 = x_transform as usize / 8;
-    let y8 = (y_transform / 8) as usize;
-    let screen_width = SCREEN_WIDTH as usize;
-    let screen_width_8 = screen_width / 8;
-    for (byte_idx, byte) in get_text_bitmap(font, text).enumerate() {
-        let x = byte_idx;
-        let y = byte_idx % 8;
-        let buffer_byte_index = x8 + y8 * screen_width + y * screen_width_8 + (x / 8);
-        if buffer_byte_index < buffer.len() && (x / 8 + x8) < screen_width_8 {
-            if color == 0 {
-                buffer[buffer_byte_index] &= !byte;
-            } else {
-                buffer[buffer_byte_index] |= byte;
+    let char_width = 8;
+    for (char_idx, c) in text.chars().enumerate() {
+        let glyph = font.get(c).unwrap_or_default();
+        for (row, row_bits) in glyph.iter().map(|byte| byte.reverse_bits()).enumerate() {
+            let y = y_transform as usize + row;
+            if y >= SCREEN_HEIGHT as usize {
+                continue;
+            }
+            for col in 0..char_width {
+                let x = x_transform as usize + char_idx * char_width + col;
+                if x >= SCREEN_WIDTH as usize {
+                    continue;
+                }
+                if (row_bits & (1 << (7 - col))) != 0 {
+                    let byte_index = y * (SCREEN_WIDTH as usize / 8) + (x / 8);
+                    let bit_index = 7 - (x % 8);
+                    if color == 1 {
+                        buffer[byte_index] |= 1 << bit_index;
+                    } else {
+                        buffer[byte_index] &= !(1 << bit_index);
+                    }
+                }
             }
         }
     }
-}
-
-fn get_text_bitmap(font: &font8x8::unicode::BasicFonts, str: &str) -> impl Iterator<Item = u8> {
-    str.chars().flat_map(move |char| {
-        let char_buffer = font.get(char).unwrap_or_default();
-        char_buffer
-            .into_iter()
-            .map(|rendered_byte| rendered_byte.reverse_bits())
-    })
 }
