@@ -32,22 +32,7 @@ fn main() {
     set_pixel(&mut screen_buffer, 1, 1, 1);
     set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
 
-    let text_bitmap = render_text("some text ayy");
-    let x_transform = 108;
-    let y_transform = 0;
-    for (byte_idx, byte) in text_bitmap.iter().enumerate() {
-        let x = byte_idx;
-        let y = byte_idx % 8;
-        let buffer_byte_index = (x_transform / 8)
-            + ((y_transform / 8) * SCREEN_WIDTH as usize)
-            + y * (SCREEN_WIDTH as usize / 8)
-            + (x / 8);
-        if buffer_byte_index < screen_buffer.len()
-            && ((x / 8 + x_transform / 8) < SCREEN_WIDTH as usize / 8)
-        {
-            screen_buffer[buffer_byte_index] |= *byte;
-        }
-    }
+    draw_text(&mut screen_buffer, "ayy lmao", 0, 8, 0);
 
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
         let mut final_buffer: Vec<u32> = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize];
@@ -114,21 +99,33 @@ fn set_pixel(buffer: &mut [u8], x: u8, y: u8, color: u8) {
     }
 }
 
-// TODO: does this get optimised? could we do an iterator?
-fn render_text(str: &str) -> Vec<u8> {
-    let font = font8x8::unicode::BasicFonts::new();
-    let char_width = 8;
-    let buffer_width = str.len() * char_width;
-
-    // TODO: figure out how to do this without vec
-    let mut buffer = vec![0 as u8; buffer_width];
-
-    for (c_idx, char) in str.chars().enumerate() {
-        let char_buffer = font.get(char).unwrap_or_default();
-        for (rendered_byte_idx, rendered_byte) in char_buffer.iter().enumerate() {
-            buffer[c_idx * char_width + rendered_byte_idx] |= rendered_byte.reverse_bits();
+// TODO: allow moving by pixel instead of by byte
+fn draw_text(buffer: &mut [u8], text: &str, x_transform: u8, y_transform: u8, color: u8) {
+    for (byte_idx, byte) in get_text_bitmap(&text).enumerate() {
+        let x = byte_idx;
+        let y = byte_idx % 8;
+        let buffer_byte_index = (x_transform as usize / 8)
+            + ((y_transform / 8) * SCREEN_WIDTH) as usize
+            + y * (SCREEN_WIDTH as usize / 8)
+            + (x / 8);
+        if buffer_byte_index < buffer.len()
+            && ((x / 8 + x_transform as usize / 8) < SCREEN_WIDTH as usize / 8)
+        {
+            if color == 0 {
+                buffer[buffer_byte_index] &= !byte;
+            } else {
+                buffer[buffer_byte_index] |= byte;
+            }
         }
     }
+}
 
-    return buffer;
+fn get_text_bitmap(str: &str) -> impl Iterator<Item = u8> {
+    let font = font8x8::unicode::BasicFonts::new();
+    str.chars().flat_map(move |char| {
+        let char_buffer = font.get(char).unwrap_or_default();
+        char_buffer
+            .into_iter()
+            .map(|rendered_byte| rendered_byte.reverse_bits())
+    })
 }
