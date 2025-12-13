@@ -35,10 +35,6 @@ fn main() {
     test_signal.set(20);
     test_signal.set(21);
 
-    let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
-    let text_el = TextUIElement::new(multi_derivation, (0, 0));
-    ui_context.mount(text_el);
-
     let mut window = minifb::Window::new(
         "WATCH DEBUG SCREEN",
         SCREEN_WIDTH as usize,
@@ -52,12 +48,22 @@ fn main() {
     // Mimic low refresh rate of e-ink
     window.set_target_fps(3);
 
+    let counter = Signal::new(0);
+    let toggled = derived(&counter, |c| {
+        if c % 2 == 0 { "on" } else { "off" }.to_string()
+    });
+
+    let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
+    let text_el = TextUIElement::new(toggled, (0, 0));
+    ui_context.mount(text_el);
+
     // set_pixel(&mut screen_buffer, 1, 1, 1);
     // set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
 
     // draw_text(&mut screen_buffer, &font, "ayy lmao", 1, 11, 0);
 
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
+        counter.set(counter.peek() + 1);
         ui_context.handle_draw_requests();
         let mut final_buffer: Vec<u32> = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize];
         for i in 0..final_buffer.len() {

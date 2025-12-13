@@ -351,8 +351,9 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
         });
     }
     fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>> {
+        let toggled = self.text.peek() == "on";
         Box::new((rect.y..=(rect.y + rect.height)).flat_map(move |y| {
-            (rect.x..=(rect.x + rect.width)).map(move |x| if x % 2 == 0 { 1 } else { 0 })
+            (rect.x..=(rect.x + rect.width)).map(move |x| if toggled && x % 2 == 0 { 1 } else { 0 })
         }))
     }
     fn get_bounding_rect(&self) -> BoundingRect {
