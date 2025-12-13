@@ -38,7 +38,7 @@ impl<T: Copy + PartialEq> Signal<T> {
         Signal {
             data: Rc::new(RefCell::new(SignalData {
                 value: initial_value,
-                listeners: Vec::new(),
+                listeners: Vec::with_capacity(4),
             })),
         }
     }
@@ -85,7 +85,7 @@ pub fn derived<
             cache: None,
             deps: dep0.peek(),
             compute: compute,
-            listeners: Vec::new(),
+            listeners: Vec::with_capacity(4),
         })),
     };
     let ds_clone = ds.data.clone();
@@ -113,7 +113,7 @@ pub fn derived2<
             cache: None,
             deps: (deps.0.peek(), deps.1.peek()),
             compute,
-            listeners: Vec::new(),
+            listeners: Vec::with_capacity(4),
         })),
     };
     let ds_clone = ds.data.clone();
@@ -272,7 +272,9 @@ pub struct UIContext {
 impl UIContext {
     pub fn new(font: font8x8::unicode::BasicFonts) -> UIContext {
         UIContext {
-            elements: ArbitraryIdStore { data: Vec::new() },
+            elements: ArbitraryIdStore {
+                data: Vec::with_capacity(64),
+            },
             elements_requesting_redraw: HashSet::new(),
             font,
             screen_buffer: alloc::vec![0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8],
