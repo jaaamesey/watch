@@ -1,6 +1,8 @@
 use font8x8::{self, UnicodeFonts};
 use minifb;
-use watch_lib::{self, Observable, Signal, TextUIElement, UIContext, derived, derived2};
+use watch_lib::{
+    self, BoundingRect, Observable, Signal, TextUIElement, UIContext, derived, derived2,
+};
 
 const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
@@ -54,7 +56,15 @@ fn main() {
     });
 
     let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
-    let text_el = TextUIElement::new(toggled, (0, 0));
+    let text_el = TextUIElement::new(
+        toggled,
+        BoundingRect {
+            x: 8,
+            y: 16,
+            width: 64,
+            height: 20,
+        },
+    );
     ui_context.mount(text_el);
 
     // set_pixel(&mut screen_buffer, 1, 1, 1);

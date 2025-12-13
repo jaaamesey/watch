@@ -264,7 +264,7 @@ impl<T: Clone> Observable<T> for Constant<T> {
 
 pub struct UIContext {
     elements: ArbitraryIdStore<Box<dyn UIElement>>,
-    elements_requesting_redraw: HashSet<usize>,
+    elements_requesting_redraw: Rc<RefCell<HashSet<usize>>>,
     font: font8x8::unicode::BasicFonts,
     screen_buffer: Vec<u8>,
 }
@@ -275,23 +275,22 @@ impl UIContext {
             elements: ArbitraryIdStore {
                 data: Vec::with_capacity(64),
             },
-            elements_requesting_redraw: HashSet::with_capacity(64),
+            elements_requesting_redraw: Rc::new(RefCell::new(HashSet::with_capacity(64))),
             font,
             screen_buffer: alloc::vec![0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8],
         }
     }
     pub fn mount<El: UIElement + 'static>(&mut self, element: El) {
         let id = self.elements.add(Box::new(element));
-        // let el = self.elements.get(id);
-        // let rect = el.unwrap().get_bounding_rect();
-        self.elements_requesting_redraw.insert(id);
-        // el.unwrap()._pixel(self, 0, 0);
+        self.elements_requesting_redraw.borrow_mut().insert(id);
+        let el = self.elements.get(id).unwrap();
+        el.mount_to_context(self.elements_requesting_redraw.clone(), id);
     }
     pub fn get_screen_buffer(&self) -> &Vec<u8> {
         &self.screen_buffer
     }
     pub fn handle_draw_requests(&mut self) {
-        for id in self.elements_requesting_redraw.iter() {
+        for id in self.elements_requesting_redraw.borrow().iter() {
             let el = self.elements.get(*id).unwrap();
             // TODO: redraw els behind (if not already in this list - actually maybe we need a sorting strategy)
             // (or maybe elements requesting redraw just determines a bounding box to redraw??? idk)
@@ -315,11 +314,12 @@ impl UIContext {
                 }
             }
         }
+        self.elements_requesting_redraw.borrow_mut().clear();
     }
 }
 
 pub trait UIElement {
-    fn mount_to_context(&self, ctx: Rc<RefCell<UIContext>>, id: usize);
+    fn mount_to_context(&self, ctx: Rc<RefCell<HashSet<usize>>>, id: usize);
     // Coordinates are in element space
     fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>>;
     fn get_bounding_rect(&self) -> BoundingRect;
@@ -327,29 +327,29 @@ pub trait UIElement {
 
 pub struct TextUIElement<TextObservable: Observable<String>> {
     text: TextObservable,
-    pos: (u8, u8),
+    rect: BoundingRect,
 }
 
 impl<TO: Observable<String>> TextUIElement<TO> {
-    pub fn new(text: TO, pos: (u8, u8)) -> TextUIElement<TO> {
-        TextUIElement { text, pos }
+    pub fn new(text: TO, rect: BoundingRect) -> TextUIElement<TO> {
+        TextUIElement { text, rect }
     }
 }
 
 #[derive(Clone, Copy)]
-struct BoundingRect {
-    x: u8,
-    y: u8,
-    width: u8,
-    height: u8,
+pub struct BoundingRect {
+    pub x: u8,
+    pub y: u8,
+    pub width: u8,
+    pub height: u8,
 }
 
 impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
-    fn mount_to_context(&self, ctx: Rc<RefCell<UIContext>>, id: usize) {
+    fn mount_to_context(&self, ctx: Rc<RefCell<HashSet<usize>>>, id: usize) {
         // TODO: Unsubscribe on unmount
         let subscription_id = self.text.subscribe(move |_| {
             let mut ctx_borrowed = ctx.borrow_mut();
-            ctx_borrowed.elements_requesting_redraw.insert(id);
+            ctx_borrowed.insert(id);
         });
     }
     fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>> {
@@ -359,11 +359,6 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
         }))
     }
     fn get_bounding_rect(&self) -> BoundingRect {
-        BoundingRect {
-            x: 100,
-            y: 100,
-            width: 64,
-            height: 16,
-        }
+        self.rect
     }
 }
