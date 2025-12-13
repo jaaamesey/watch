@@ -1,8 +1,11 @@
 #![no_std]
 extern crate alloc;
+use alloc::boxed::Box;
 use alloc::rc::Rc;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use hashbrown::HashSet;
 
 struct SignalData<T: Clone> {
     value: T,
@@ -48,6 +51,7 @@ impl<T: Copy> Observable<T> for Signal<T> {
             .listeners
             .iter()
             .enumerate()
+            .rev()
             .find(|(_, v)| v.is_none())
             .map(|i| i.0);
         if let Some(i) = chosen_index {
@@ -202,5 +206,96 @@ impl<Derivation: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivatio
                 (listener.borrow_mut())(new.clone());
             }
         }
+    }
+}
+
+struct ArbitraryIdStore<V> {
+    data: Vec<Option<V>>,
+}
+
+impl<V> ArbitraryIdStore<V> {
+    fn add(&mut self, value: V) -> usize {
+        // TODO: is there a more performant way to fill old gaps? remember, index matters - maybe this should be a hashmap instead
+        let chosen_index = self
+            .data
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, v)| v.is_none())
+            .map(|i| i.0);
+        if let Some(i) = chosen_index {
+            self.data[i] = Some(value);
+            return i;
+        } else {
+            self.data.push(Some(value));
+            return self.data.len() - 1;
+        }
+    }
+    fn delete(&mut self, id: usize) {
+        self.data[id] = None;
+    }
+    fn get(&self, id: usize) -> Option<&V> {
+        if self.data.get(id).unwrap_or(&None).is_none() {
+            None
+        } else {
+            Some(&self.data[id].as_ref().unwrap())
+        }
+    }
+}
+pub struct Constant<T: Clone> {
+    value: T,
+}
+
+impl<T: Clone> Observable<T> for Constant<T> {
+    fn peek(&self) -> T {
+        self.value.clone()
+    }
+
+    fn subscribe<F: FnMut(T) + 'static>(&self, _: F) -> usize {
+        return 0;
+    }
+
+    fn unsubscribe(&self, _: usize) {}
+}
+
+pub struct UIContext {
+    elements: ArbitraryIdStore<Box<dyn UIElement>>,
+    elements_requesting_redraw: HashSet<usize>,
+}
+
+impl UIContext {
+    pub fn mount<El: UIElement + 'static>(&mut self, element: El) {
+        let id = self.elements.add(Box::new(element));
+        let el = self.elements.get(id);
+        el.unwrap().draw_pixel(0, 0);
+    }
+}
+
+pub trait UIElement {
+    fn mount_to_context(&self, ctx: Rc<RefCell<UIContext>>, id: usize);
+    fn draw_pixel(&self, x: u8, y: u8) -> u8;
+}
+
+pub struct TextUIElement<TextObservable: Observable<String>> {
+    text: TextObservable,
+    pos: (u8, u8),
+}
+
+impl<TO: Observable<String>> TextUIElement<TO> {
+    pub fn new(text: TO, pos: (u8, u8)) -> TextUIElement<TO> {
+        TextUIElement { text, pos }
+    }
+}
+
+impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
+    fn mount_to_context(&self, ctx: Rc<RefCell<UIContext>>, id: usize) {
+        // TODO: Unsubscribe on unmount
+        let subscription_id = self.text.subscribe(move |_| {
+            let mut ctx_borrowed = ctx.borrow_mut();
+            ctx_borrowed.elements_requesting_redraw.insert(id);
+        });
+    }
+    fn draw_pixel(&self, x: u8, y: u8) -> u8 {
+        0
     }
 }

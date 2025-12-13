@@ -1,6 +1,6 @@
 use font8x8::{self, UnicodeFonts};
 use minifb;
-use watch_lib::{self, Observable, Signal, derived, derived2};
+use watch_lib::{self, Observable, Signal, TextUIElement, derived, derived2};
 
 const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
@@ -37,6 +37,8 @@ fn main() {
     //let x = derivation.borrow();
     test_signal.set(20);
     test_signal.set(21);
+
+    let text_el = TextUIElement::new(multi_derivation, (0, 0));
 
     //   dbg!(test_signal.peek());
     //dbg!(borrowed.peek());
