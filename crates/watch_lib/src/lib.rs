@@ -6,7 +6,7 @@ use core::cell::RefCell;
 
 struct SignalData<T: Clone> {
     value: T,
-    listeners: Vec<Rc<RefCell<dyn FnMut(T)>>>,
+    listeners: Vec<Option<Rc<RefCell<dyn FnMut(T)>>>>,
 }
 
 pub struct Signal<T: Clone> {
@@ -22,7 +22,9 @@ impl<T: Copy + PartialEq> Signal<T> {
         let mut data = self.data.borrow_mut();
         data.value = value;
         for i in 0..data.listeners.len() {
-            (data.listeners[i].borrow_mut())(value);
+            if let Some(listener) = &data.listeners[i] {
+                (listener.borrow_mut())(value);
+            }
         }
     }
     pub fn new(initial_value: T) -> Signal<T> {
@@ -41,11 +43,23 @@ impl<T: Copy> Observable<T> for Signal<T> {
     }
     fn subscribe<F: FnMut(T) + 'static>(&self, on_change: F) -> usize {
         let mut data = self.data.borrow_mut();
-        data.listeners.push(Rc::new(RefCell::new(on_change)));
+        // TODO: is there a more performant way to fill old gaps? remember, index matters - maybe this should be a hashmap instead
+        let chosen_index = data
+            .listeners
+            .iter()
+            .enumerate()
+            .find(|(_, v)| v.is_none())
+            .map(|i| i.0);
+        if let Some(i) = chosen_index {
+            data.listeners[i] = Some(Rc::new(RefCell::new(on_change)));
+        } else {
+            data.listeners.push(Some(Rc::new(RefCell::new(on_change))));
+        }
         data.listeners.len() - 1
     }
     fn unsubscribe(&self, id: usize) {
-        // *self.listeners[id].borrow_mut() = || {};
+        let mut data = self.data.borrow_mut();
+        data.listeners[id] = None;
     }
 }
 
@@ -123,7 +137,7 @@ struct DerivedSignalData<
     cache: Option<Derivation>,
     deps: Deps,
     compute: F,
-    listeners: Vec<Rc<RefCell<dyn FnMut(Derivation)>>>,
+    listeners: Vec<Option<Rc<RefCell<dyn FnMut(Derivation)>>>>,
 }
 
 pub struct DerivedSignal<
@@ -148,7 +162,17 @@ impl<T: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
 
     fn subscribe<OnChange: FnMut(T) + 'static>(&self, on_change: OnChange) -> usize {
         let mut data = self.data.borrow_mut();
-        data.listeners.push(Rc::new(RefCell::new(on_change)));
+        let chosen_index = data
+            .listeners
+            .iter()
+            .enumerate()
+            .find(|(_, v)| v.is_none())
+            .map(|i| i.0);
+        if let Some(i) = chosen_index {
+            data.listeners[i] = Some(Rc::new(RefCell::new(on_change)));
+        } else {
+            data.listeners.push(Some(Rc::new(RefCell::new(on_change))));
+        }
         data.listeners.len() - 1
     }
 
@@ -174,22 +198,9 @@ impl<Derivation: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivatio
         }
         let new = self.cache.clone().unwrap();
         for i in 0..self.listeners.len() {
-            (self.listeners[i].borrow_mut())(new.clone());
+            if let Some(listener) = &self.listeners[i] {
+                (listener.borrow_mut())(new.clone());
+            }
         }
-    }
-}
-
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
     }
 }

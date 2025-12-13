@@ -1,5 +1,3 @@
-use std::{cell::RefCell, rc::Rc};
-
 use font8x8::{self, UnicodeFonts};
 use minifb;
 use watch_lib::{self, Observable, Signal, derived, derived2};
