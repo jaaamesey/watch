@@ -275,7 +275,7 @@ impl UIContext {
             elements: ArbitraryIdStore {
                 data: Vec::with_capacity(64),
             },
-            elements_requesting_redraw: HashSet::new(),
+            elements_requesting_redraw: HashSet::with_capacity(64),
             font,
             screen_buffer: alloc::vec![0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8],
         }
