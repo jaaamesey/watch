@@ -56,7 +56,7 @@ fn derived<
 ) -> DerivedSignal<Computation, D0, Compute> {
     let ds = DerivedSignal {
         data: Rc::new(RefCell::new(DerivedSignalData {
-            cache: Some(compute(dep0.peek())),
+            cache: None,
             deps: dep0.peek(),
             compute: compute,
             listeners: Vec::new(),
@@ -79,26 +79,25 @@ fn derived2<
     OD0: Observable<D0>,
     OD1: Observable<D1>,
 >(
-    dep0: &mut OD0,
-    dep1: &mut OD1,
+    deps: (&mut OD0, &mut OD1),
     compute: Compute,
 ) -> DerivedSignal<Computation, (D0, D1), Compute> {
     let ds = DerivedSignal {
         data: Rc::new(RefCell::new(DerivedSignalData {
-            cache: Some(compute((dep0.peek(), dep1.peek()))),
-            deps: (dep0.peek(), dep1.peek()),
+            cache: None,
+            deps: (deps.0.peek(), deps.1.peek()),
             compute,
             listeners: Vec::new(),
         })),
     };
     let ds_clone = ds.data.clone();
-    dep0.subscribe(move |new| {
+    deps.0.subscribe(move |new| {
         let mut borrowed = ds_clone.borrow_mut();
         borrowed.deps.0 = new;
         borrowed.maybe_recompute();
     });
     let ds_clone = ds.data.clone();
-    dep1.subscribe(move |new| {
+    deps.1.subscribe(move |new| {
         let mut borrowed = ds_clone.borrow_mut();
         borrowed.deps.1 = new;
         borrowed.maybe_recompute();
@@ -206,7 +205,7 @@ fn main() {
         dbg!("Nested derivation changed to 2", new);
     });
 
-    let mut multi_derivation = derived2(&mut derivation, &mut nested_derivation, |(d, nd)| {
+    let mut multi_derivation = derived2((&mut derivation, &mut nested_derivation), |(d, nd)| {
         d.to_string() + "-" + &nd.to_string()
     });
     multi_derivation.subscribe(|new| {
