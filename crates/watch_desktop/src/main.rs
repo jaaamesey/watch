@@ -134,12 +134,12 @@ impl<T: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
     for DerivedSignal<T, Deps, F>
 {
     fn peek(&self) -> T {
-        let data = self.data.borrow();
+        let mut data = self.data.borrow_mut();
         if let Some(val) = &data.cache {
             return val.clone();
         }
-        // Can't cache here because otherwise this would mutate
-        return (data.compute)(data.deps);
+        data.cache = Some((data.compute)(data.deps));
+        data.cache.clone().unwrap()
     }
 
     fn subscribe<OnChange: FnMut(T) + 'static>(&mut self, on_change: OnChange) -> usize {
