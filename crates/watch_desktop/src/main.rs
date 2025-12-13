@@ -1,6 +1,6 @@
 use font8x8::{self, UnicodeFonts};
 use minifb;
-use watch_lib::{self, Observable, Signal, TextUIElement, derived, derived2};
+use watch_lib::{self, Observable, Signal, TextUIElement, UIContext, derived, derived2};
 
 const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
@@ -32,18 +32,12 @@ fn main() {
         dbg!("multi derivation changed to", new);
     });
 
-    // any kind of borrow here in a let seems to be the crashing line
-
-    //let x = derivation.borrow();
     test_signal.set(20);
     test_signal.set(21);
 
+    let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
     let text_el = TextUIElement::new(multi_derivation, (0, 0));
-
-    //   dbg!(test_signal.peek());
-    //dbg!(borrowed.peek());
-
-    let mut screen_buffer = [0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8];
+    ui_context.mount(text_el);
 
     let mut window = minifb::Window::new(
         "WATCH DEBUG SCREEN",
@@ -58,19 +52,19 @@ fn main() {
     // Mimic low refresh rate of e-ink
     window.set_target_fps(3);
 
-    set_pixel(&mut screen_buffer, 1, 1, 1);
-    set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
+    // set_pixel(&mut screen_buffer, 1, 1, 1);
+    // set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
 
-    let font = font8x8::unicode::BasicFonts::new();
-
-    draw_text(&mut screen_buffer, &font, "ayy lmao", 1, 11, 0);
+    // draw_text(&mut screen_buffer, &font, "ayy lmao", 1, 11, 0);
 
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
+        ui_context.handle_draw_requests();
         let mut final_buffer: Vec<u32> = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize];
         for i in 0..final_buffer.len() {
-            let color = get_pixel_by_index(&screen_buffer, i);
+            let color = get_pixel_by_index(ui_context.get_screen_buffer(), i);
             final_buffer[i] = if color == 0 { 0 } else { u32::MAX };
         }
+
         window
             .update_with_buffer(&final_buffer, SCREEN_WIDTH.into(), SCREEN_HEIGHT.into())
             .unwrap();

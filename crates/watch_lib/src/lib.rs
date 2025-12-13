@@ -7,6 +7,10 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use hashbrown::HashSet;
 
+pub const SCREEN_WIDTH: u8 = 200;
+pub const SCREEN_HEIGHT: u8 = 200;
+
+// TODO: safely handle unwraps
 struct SignalData<T: Clone> {
     value: T,
     listeners: Vec<Option<Rc<RefCell<dyn FnMut(T)>>>>,
@@ -261,19 +265,62 @@ impl<T: Clone> Observable<T> for Constant<T> {
 pub struct UIContext {
     elements: ArbitraryIdStore<Box<dyn UIElement>>,
     elements_requesting_redraw: HashSet<usize>,
+    font: font8x8::unicode::BasicFonts,
+    screen_buffer: Vec<u8>,
 }
 
 impl UIContext {
+    pub fn new(font: font8x8::unicode::BasicFonts) -> UIContext {
+        UIContext {
+            elements: ArbitraryIdStore { data: Vec::new() },
+            elements_requesting_redraw: HashSet::new(),
+            font,
+            screen_buffer: alloc::vec![0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8],
+        }
+    }
     pub fn mount<El: UIElement + 'static>(&mut self, element: El) {
         let id = self.elements.add(Box::new(element));
-        let el = self.elements.get(id);
-        el.unwrap().draw_pixel(0, 0);
+        // let el = self.elements.get(id);
+        // let rect = el.unwrap().get_bounding_rect();
+        self.elements_requesting_redraw.insert(id);
+        // el.unwrap()._pixel(self, 0, 0);
+    }
+    pub fn get_screen_buffer(&self) -> &Vec<u8> {
+        &self.screen_buffer
+    }
+    pub fn handle_draw_requests(&mut self) {
+        for id in self.elements_requesting_redraw.iter() {
+            let el = self.elements.get(*id).unwrap();
+            // TODO: redraw els behind (if not already in this list - actually maybe we need a sorting strategy)
+            // (or maybe elements requesting redraw just determines a bounding box to redraw??? idk)
+            let rect = el.get_bounding_rect();
+            let mut pixel_iter = el.get_pixels(self, rect);
+            for y in rect.y..=(rect.y + rect.height) {
+                for x in rect.x..=(rect.x + rect.width) {
+                    if let Some(pixel) = pixel_iter.next() {
+                        let screen_width = SCREEN_WIDTH as usize;
+                        let idx = (y as usize) * screen_width + (x as usize);
+                        let byte_idx = idx / 8;
+                        let bit_idx = 7 - (idx % 8);
+                        if byte_idx < self.screen_buffer.len() {
+                            if pixel != 0 {
+                                self.screen_buffer[byte_idx] |= 1 << bit_idx;
+                            } else {
+                                self.screen_buffer[byte_idx] &= !(1 << bit_idx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 pub trait UIElement {
     fn mount_to_context(&self, ctx: Rc<RefCell<UIContext>>, id: usize);
-    fn draw_pixel(&self, x: u8, y: u8) -> u8;
+    // Coordinates are in element space
+    fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>>;
+    fn get_bounding_rect(&self) -> BoundingRect;
 }
 
 pub struct TextUIElement<TextObservable: Observable<String>> {
@@ -287,6 +334,14 @@ impl<TO: Observable<String>> TextUIElement<TO> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BoundingRect {
+    x: u8,
+    y: u8,
+    width: u8,
+    height: u8,
+}
+
 impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
     fn mount_to_context(&self, ctx: Rc<RefCell<UIContext>>, id: usize) {
         // TODO: Unsubscribe on unmount
@@ -295,7 +350,17 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
             ctx_borrowed.elements_requesting_redraw.insert(id);
         });
     }
-    fn draw_pixel(&self, x: u8, y: u8) -> u8 {
-        0
+    fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>> {
+        Box::new((rect.y..=(rect.y + rect.height)).flat_map(move |y| {
+            (rect.x..=(rect.x + rect.width)).map(move |x| if x % 2 == 0 { 1 } else { 0 })
+        }))
+    }
+    fn get_bounding_rect(&self) -> BoundingRect {
+        BoundingRect {
+            x: 100,
+            y: 100,
+            width: 64,
+            height: 16,
+        }
     }
 }
