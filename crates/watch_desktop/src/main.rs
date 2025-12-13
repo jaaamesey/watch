@@ -8,7 +8,7 @@ const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
 
 // TODO: strange that setting doesn't require mut, but listening does?
-struct Signal<T: Clone + Copy> {
+struct Signal<T: Clone> {
     value: Rc<RefCell<T>>,
     listeners: Vec<Rc<RefCell<dyn FnMut(T)>>>,
 }
@@ -30,34 +30,6 @@ impl<T: Copy + PartialEq> Signal<T> {
             listeners: Vec::new(),
         }
     }
-    // pub fn derived2<
-    //     Computation: Clone + Copy + PartialEq,
-    //     D0: Clone + Copy,
-    //     D1: Clone + Copy,
-    //     OD0: Observable<D0>,
-    //     OD1: Observable<D1>,
-    // >(
-    //     dep0: &mut OD0,
-    //     dep1: &mut OD1,
-    //     compute: &'static fn(D0, D1) -> Computation,
-    // ) {
-    //     let ds = Rc::new(RefCell::new(DerivedSignal {
-    //         cache: Some(compute(dep0.peek(), dep1.peek())),
-    //         deps: (dep0.peek(), dep1.peek()),
-    //         compute: |d| compute(d.0, d.1),
-    //         listeners: Vec::new(),
-    //     }));
-    //     let ds_clone = ds.clone();
-    //     dep0.subscribe(move |new| {
-    //         ds_clone.borrow_mut().deps.0 = new;
-    //         ds_clone.borrow_mut().maybe_recompute();
-    //     });
-    //     let ds_clone = ds.clone();
-    //     dep1.subscribe(move |new| {
-    //         ds_clone.borrow_mut().deps.1 = new;
-    //         ds_clone.borrow_mut().maybe_recompute();
-    //     });
-    // }
 }
 
 impl<T: Copy> Observable<T> for Signal<T> {
@@ -74,7 +46,7 @@ impl<T: Copy> Observable<T> for Signal<T> {
 }
 
 fn derived<
-    Computation: Copy + PartialEq + 'static,
+    Computation: Clone + PartialEq + 'static,
     Compute: Fn(D0) -> Computation + 'static,
     D0: Clone + Copy + 'static,
     OD0: Observable<D0>,
@@ -99,6 +71,41 @@ fn derived<
     ds
 }
 
+fn derived2<
+    Computation: Clone + PartialEq + 'static,
+    Compute: Fn((D0, D1)) -> Computation + 'static,
+    D0: Clone + Copy + 'static,
+    D1: Clone + Copy + 'static,
+    OD0: Observable<D0>,
+    OD1: Observable<D1>,
+>(
+    dep0: &mut OD0,
+    dep1: &mut OD1,
+    compute: Compute,
+) -> DerivedSignal<Computation, (D0, D1), Compute> {
+    let ds = DerivedSignal {
+        data: Rc::new(RefCell::new(DerivedSignalData {
+            cache: Some(compute((dep0.peek(), dep1.peek()))),
+            deps: (dep0.peek(), dep1.peek()),
+            compute,
+            listeners: Vec::new(),
+        })),
+    };
+    let ds_clone = ds.data.clone();
+    dep0.subscribe(move |new| {
+        let mut borrowed = ds_clone.borrow_mut();
+        borrowed.deps.0 = new;
+        borrowed.maybe_recompute();
+    });
+    let ds_clone = ds.data.clone();
+    dep1.subscribe(move |new| {
+        let mut borrowed = ds_clone.borrow_mut();
+        borrowed.deps.1 = new;
+        borrowed.maybe_recompute();
+    });
+    ds
+}
+
 trait Observable<T> {
     fn peek(&self) -> T;
     fn subscribe<F: FnMut(T) + 'static>(&mut self, on_change: F) -> usize;
@@ -106,7 +113,7 @@ trait Observable<T> {
 }
 
 struct DerivedSignalData<
-    Derivation: Clone + Copy + PartialEq + 'static,
+    Derivation: Clone + PartialEq + 'static,
     Deps: Clone + Copy + 'static,
     F: Fn(Deps) -> Derivation + 'static,
 > {
@@ -117,20 +124,20 @@ struct DerivedSignalData<
 }
 
 struct DerivedSignal<
-    Derivation: Clone + Copy + PartialEq + 'static,
+    Derivation: Clone + PartialEq + 'static,
     Deps: Clone + Copy + 'static,
     F: Fn(Deps) -> Derivation + 'static,
 > {
     data: Rc<RefCell<DerivedSignalData<Derivation, Deps, F>>>,
 }
 
-impl<T: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
+impl<T: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
     for DerivedSignal<T, Deps, F>
 {
     fn peek(&self) -> T {
         let data = self.data.borrow();
-        if let Some(val) = data.cache {
-            return val;
+        if let Some(val) = &data.cache {
+            return val.clone();
         }
         // Can't cache here because otherwise this would mutate
         return (data.compute)(data.deps);
@@ -147,7 +154,7 @@ impl<T: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observab
     }
 }
 
-impl<Derivation: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivation>
+impl<Derivation: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivation>
     DerivedSignalData<Derivation, Deps, F>
 {
     pub fn maybe_recompute(&mut self) {
@@ -156,15 +163,15 @@ impl<Derivation: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> De
             self.cache = None;
             return;
         }
-        let prev = self.cache;
-        let new = (self.compute)(self.deps);
-        self.cache = Some(new);
+        let prev = self.cache.clone();
+        self.cache = Some((self.compute)(self.deps));
         // TODO: have a way to skip this for large things?
         if prev == self.cache {
             return;
         }
+        let new = self.cache.clone().unwrap();
         for i in 0..self.listeners.len() {
-            (self.listeners[i].borrow_mut())(new);
+            (self.listeners[i].borrow_mut())(new.clone());
         }
     }
 }
@@ -197,6 +204,13 @@ fn main() {
     });
     nested_derivation.subscribe(|new| {
         dbg!("Nested derivation changed to 2", new);
+    });
+
+    let mut multi_derivation = derived2(&mut derivation, &mut nested_derivation, |(d, nd)| {
+        d.to_string() + "-" + &nd.to_string()
+    });
+    multi_derivation.subscribe(|new| {
+        dbg!("multi derivation changed to", new);
     });
 
     // any kind of borrow here in a let seems to be the crashing line
