@@ -7,7 +7,6 @@ use watch_lib;
 const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
 
-// TODO: strange that setting doesn't require mut, but listening does?
 struct SignalData<T: Clone> {
     value: T,
     listeners: Vec<Rc<RefCell<dyn FnMut(T)>>>,
