@@ -8,9 +8,13 @@ const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
 
 // TODO: strange that setting doesn't require mut, but listening does?
-struct Signal<T: Clone> {
-    value: Rc<RefCell<T>>,
+struct SignalData<T: Clone> {
+    value: T,
     listeners: Vec<Rc<RefCell<dyn FnMut(T)>>>,
+}
+
+struct Signal<T: Clone> {
+    data: Rc<RefCell<SignalData<T>>>,
 }
 
 impl<T: Copy + PartialEq> Signal<T> {
@@ -19,28 +23,32 @@ impl<T: Copy + PartialEq> Signal<T> {
         if value == prev {
             return;
         }
-        *self.value.borrow_mut() = value;
-        for i in 0..self.listeners.len() {
-            (self.listeners[i].borrow_mut())(value);
+        let mut data = self.data.borrow_mut();
+        data.value = value;
+        for i in 0..data.listeners.len() {
+            (data.listeners[i].borrow_mut())(value);
         }
     }
     pub fn new(initial_value: T) -> Signal<T> {
         Signal {
-            value: Rc::new(RefCell::new(initial_value)),
-            listeners: Vec::new(),
+            data: Rc::new(RefCell::new(SignalData {
+                value: initial_value,
+                listeners: Vec::new(),
+            })),
         }
     }
 }
 
 impl<T: Copy> Observable<T> for Signal<T> {
     fn peek(&self) -> T {
-        *self.value.borrow()
+        self.data.borrow().value
     }
-    fn subscribe<F: FnMut(T) + 'static>(&mut self, on_change: F) -> usize {
-        self.listeners.push(Rc::new(RefCell::new(on_change)));
-        self.listeners.len() - 1
+    fn subscribe<F: FnMut(T) + 'static>(&self, on_change: F) -> usize {
+        let mut data = self.data.borrow_mut();
+        data.listeners.push(Rc::new(RefCell::new(on_change)));
+        data.listeners.len() - 1
     }
-    fn unsubscribe(&mut self, id: usize) {
+    fn unsubscribe(&self, id: usize) {
         // *self.listeners[id].borrow_mut() = || {};
     }
 }
@@ -51,7 +59,7 @@ fn derived<
     D0: Clone + Copy + 'static,
     OD0: Observable<D0>,
 >(
-    dep0: &mut OD0,
+    dep0: &OD0,
     compute: Compute,
 ) -> DerivedSignal<Computation, D0, Compute> {
     let ds = DerivedSignal {
@@ -79,7 +87,7 @@ fn derived2<
     OD0: Observable<D0>,
     OD1: Observable<D1>,
 >(
-    deps: (&mut OD0, &mut OD1),
+    deps: (&OD0, &OD1),
     compute: Compute,
 ) -> DerivedSignal<Computation, (D0, D1), Compute> {
     let ds = DerivedSignal {
@@ -107,8 +115,8 @@ fn derived2<
 
 trait Observable<T> {
     fn peek(&self) -> T;
-    fn subscribe<F: FnMut(T) + 'static>(&mut self, on_change: F) -> usize;
-    fn unsubscribe(&mut self, id: usize);
+    fn subscribe<F: FnMut(T) + 'static>(&self, on_change: F) -> usize;
+    fn unsubscribe(&self, id: usize);
 }
 
 struct DerivedSignalData<
@@ -142,13 +150,13 @@ impl<T: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
         data.cache.clone().unwrap()
     }
 
-    fn subscribe<OnChange: FnMut(T) + 'static>(&mut self, on_change: OnChange) -> usize {
+    fn subscribe<OnChange: FnMut(T) + 'static>(&self, on_change: OnChange) -> usize {
         let mut data = self.data.borrow_mut();
         data.listeners.push(Rc::new(RefCell::new(on_change)));
         data.listeners.len() - 1
     }
 
-    fn unsubscribe(&mut self, id: usize) {
+    fn unsubscribe(&self, id: usize) {
         //todo!()
     }
 }
@@ -186,18 +194,18 @@ impl<'a> TextUIElement<'a> {
 }
 
 fn main() {
-    let mut test_signal = Signal::new(0);
+    let test_signal = Signal::new(0);
 
     test_signal.subscribe(|n| {
         dbg!("value changed", n);
     });
 
-    let mut derivation = derived(&mut test_signal, |n| n + 1);
+    let derivation = derived(&test_signal, |n| n + 1);
     derivation.subscribe(|new| {
         dbg!("Derivation changed to", new);
     });
 
-    let mut nested_derivation = derived(&mut derivation, |n| n * 2);
+    let nested_derivation = derived(&derivation, |n| n * 2);
     nested_derivation.subscribe(|new| {
         dbg!("Nested derivation changed to", new);
     });
@@ -205,7 +213,7 @@ fn main() {
         dbg!("Nested derivation changed to 2", new);
     });
 
-    let mut multi_derivation = derived2((&mut derivation, &mut nested_derivation), |(d, nd)| {
+    let multi_derivation = derived2((&derivation, &nested_derivation), |(d, nd)| {
         d.to_string() + "-" + &nd.to_string()
     });
     multi_derivation.subscribe(|new| {
