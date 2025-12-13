@@ -7,42 +7,57 @@ use watch_lib;
 const SCREEN_WIDTH: u8 = 200;
 const SCREEN_HEIGHT: u8 = 200;
 
+// TODO: strange that setting doesn't require mut, but listening does?
 struct Signal<T: Clone + Copy> {
     value: Rc<RefCell<T>>,
     listeners: Vec<Rc<RefCell<dyn FnMut(T)>>>,
 }
 
-impl<T: Copy> Signal<T> {
-    pub fn set(&mut self, value: T) {
+impl<T: Copy + PartialEq> Signal<T> {
+    pub fn set(&self, value: T) {
+        let prev = self.peek();
+        if value == prev {
+            return;
+        }
         *self.value.borrow_mut() = value;
+        for i in 0..self.listeners.len() {
+            (self.listeners[i].borrow_mut())(value);
+        }
     }
-    pub fn derived<
-        Computation: Clone + Copy,
-        D0: Clone + Copy,
-        D1: Clone + Copy,
-        OD0: Observable<D0>,
-        OD1: Observable<D1>,
-    >(
-        deps: (&mut OD0, &mut OD1),
-        compute: &'static fn(D0, D1) -> Computation,
-    ) {
-        let ds = Rc::new(RefCell::new(DerivedSignal {
-            cache: Some(compute(deps.0.peek(), deps.1.peek())),
-            deps: (deps.0.peek(), deps.1.peek()),
-            compute: |d| compute(d.0, d.1),
+    pub fn new(initial_value: T) -> Signal<T> {
+        Signal {
+            value: Rc::new(RefCell::new(initial_value)),
             listeners: Vec::new(),
-        }));
-        let ds_clone = ds.clone();
-        deps.0.subscribe(move |new| {
-            ds_clone.borrow_mut().deps.0 = new;
-            ds_clone.borrow_mut().recompute();
-        });
-        let ds_clone = ds.clone();
-        deps.1.subscribe(move |new| {
-            ds_clone.borrow_mut().deps.1 = new;
-            ds_clone.borrow_mut().recompute();
-        });
+        }
     }
+    // pub fn derived2<
+    //     Computation: Clone + Copy + PartialEq,
+    //     D0: Clone + Copy,
+    //     D1: Clone + Copy,
+    //     OD0: Observable<D0>,
+    //     OD1: Observable<D1>,
+    // >(
+    //     dep0: &mut OD0,
+    //     dep1: &mut OD1,
+    //     compute: &'static fn(D0, D1) -> Computation,
+    // ) {
+    //     let ds = Rc::new(RefCell::new(DerivedSignal {
+    //         cache: Some(compute(dep0.peek(), dep1.peek())),
+    //         deps: (dep0.peek(), dep1.peek()),
+    //         compute: |d| compute(d.0, d.1),
+    //         listeners: Vec::new(),
+    //     }));
+    //     let ds_clone = ds.clone();
+    //     dep0.subscribe(move |new| {
+    //         ds_clone.borrow_mut().deps.0 = new;
+    //         ds_clone.borrow_mut().maybe_recompute();
+    //     });
+    //     let ds_clone = ds.clone();
+    //     dep1.subscribe(move |new| {
+    //         ds_clone.borrow_mut().deps.1 = new;
+    //         ds_clone.borrow_mut().maybe_recompute();
+    //     });
+    // }
 }
 
 impl<T: Copy> Observable<T> for Signal<T> {
@@ -58,25 +73,87 @@ impl<T: Copy> Observable<T> for Signal<T> {
     }
 }
 
+fn derived<
+    Computation: Copy + PartialEq + 'static,
+    Compute: Fn(D0) -> Computation + 'static,
+    D0: Clone + Copy + 'static,
+    OD0: Observable<D0>,
+>(
+    dep0: &mut OD0,
+    compute: Compute,
+) -> Rc<RefCell<DerivedSignal<Computation, D0, Compute>>> {
+    let ds = Rc::new(RefCell::new(DerivedSignal {
+        cache: Some(compute(dep0.peek())),
+        deps: dep0.peek(),
+        compute: compute,
+        listeners: Vec::new(),
+    }));
+    let ds_clone = ds.clone();
+    dep0.subscribe(move |new| {
+        let mut borrowed = ds_clone.borrow_mut();
+        borrowed.deps = new;
+        borrowed.maybe_recompute();
+    });
+    ds
+}
+
 trait Observable<T> {
     fn peek(&self) -> T;
     fn subscribe<F: FnMut(T) + 'static>(&mut self, on_change: F) -> usize;
     fn unsubscribe(&mut self, id: usize);
 }
 
-struct DerivedSignal<Derivation: Clone + Copy, Deps: Clone + Copy, F: Fn(Deps) -> Derivation> {
+struct DerivedSignal<
+    Derivation: Clone + Copy + PartialEq + 'static,
+    Deps: Clone + Copy + 'static,
+    F: Fn(Deps) -> Derivation + 'static,
+> {
     cache: Option<Derivation>,
     deps: Deps,
     compute: F,
     listeners: Vec<Rc<RefCell<dyn FnMut(Derivation)>>>,
 }
 
-impl<Derivation: Clone + Copy, Deps: Clone + Copy, F: Fn(Deps) -> Derivation>
+impl<T: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
+    for DerivedSignal<T, Deps, F>
+{
+    fn peek(&self) -> T {
+        if let Some(val) = self.cache {
+            return val;
+        }
+        // Can't cache here because otherwise this would mutate
+        return (self.compute)(self.deps);
+    }
+
+    fn subscribe<OnChange: FnMut(T) + 'static>(&mut self, on_change: OnChange) -> usize {
+        self.listeners.push(Rc::new(RefCell::new(on_change)));
+        self.listeners.len() - 1
+    }
+
+    fn unsubscribe(&mut self, id: usize) {
+        //todo!()
+    }
+}
+
+impl<Derivation: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivation>
     DerivedSignal<Derivation, Deps, F>
 {
-    pub fn recompute(&mut self) {
+    pub fn maybe_recompute(&mut self) {
+        // TODO: do we need to check deps?
+        if self.listeners.is_empty() {
+            self.cache = None;
+            return;
+        }
         let prev = self.cache;
-        self.cache = Some((self.compute)(self.deps));
+        let new = (self.compute)(self.deps);
+        self.cache = Some(new);
+        // TODO: have a way to skip this for large things?
+        if prev == self.cache {
+            return;
+        }
+        for i in 0..self.listeners.len() {
+            (self.listeners[i].borrow_mut())(new);
+        }
     }
 }
 
@@ -91,6 +168,28 @@ impl<'a> TextUIElement<'a> {
 }
 
 fn main() {
+    let mut test_signal = Signal::new(0);
+
+    test_signal.subscribe(|n| {
+        dbg!("value changed", n);
+    });
+
+    {
+        let derivation = derived(&mut test_signal, |n| n + 1).clone();
+        derivation.borrow_mut().subscribe(|new| {
+            dbg!("Derivation changed to", new);
+        });
+    }
+
+    // any kind of borrow here in a let seems to be the crashing line
+
+    //let x = derivation.borrow();
+    test_signal.set(20);
+    test_signal.set(21);
+
+    //   dbg!(test_signal.peek());
+    //dbg!(borrowed.peek());
+
     let mut screen_buffer = [0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8];
 
     let mut window = minifb::Window::new(
