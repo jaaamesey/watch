@@ -81,14 +81,16 @@ fn derived<
 >(
     dep0: &mut OD0,
     compute: Compute,
-) -> Rc<RefCell<DerivedSignal<Computation, D0, Compute>>> {
-    let ds = Rc::new(RefCell::new(DerivedSignal {
-        cache: Some(compute(dep0.peek())),
-        deps: dep0.peek(),
-        compute: compute,
-        listeners: Vec::new(),
-    }));
-    let ds_clone = ds.clone();
+) -> DerivedSignal<Computation, D0, Compute> {
+    let ds = DerivedSignal {
+        data: Rc::new(RefCell::new(DerivedSignalData {
+            cache: Some(compute(dep0.peek())),
+            deps: dep0.peek(),
+            compute: compute,
+            listeners: Vec::new(),
+        })),
+    };
+    let ds_clone = ds.data.clone();
     dep0.subscribe(move |new| {
         let mut borrowed = ds_clone.borrow_mut();
         borrowed.deps = new;
@@ -103,7 +105,7 @@ trait Observable<T> {
     fn unsubscribe(&mut self, id: usize);
 }
 
-struct DerivedSignal<
+struct DerivedSignalData<
     Derivation: Clone + Copy + PartialEq + 'static,
     Deps: Clone + Copy + 'static,
     F: Fn(Deps) -> Derivation + 'static,
@@ -114,20 +116,30 @@ struct DerivedSignal<
     listeners: Vec<Rc<RefCell<dyn FnMut(Derivation)>>>,
 }
 
+struct DerivedSignal<
+    Derivation: Clone + Copy + PartialEq + 'static,
+    Deps: Clone + Copy + 'static,
+    F: Fn(Deps) -> Derivation + 'static,
+> {
+    data: Rc<RefCell<DerivedSignalData<Derivation, Deps, F>>>,
+}
+
 impl<T: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
     for DerivedSignal<T, Deps, F>
 {
     fn peek(&self) -> T {
-        if let Some(val) = self.cache {
+        let data = self.data.borrow();
+        if let Some(val) = data.cache {
             return val;
         }
         // Can't cache here because otherwise this would mutate
-        return (self.compute)(self.deps);
+        return (data.compute)(data.deps);
     }
 
     fn subscribe<OnChange: FnMut(T) + 'static>(&mut self, on_change: OnChange) -> usize {
-        self.listeners.push(Rc::new(RefCell::new(on_change)));
-        self.listeners.len() - 1
+        let mut data = self.data.borrow_mut();
+        data.listeners.push(Rc::new(RefCell::new(on_change)));
+        data.listeners.len() - 1
     }
 
     fn unsubscribe(&mut self, id: usize) {
@@ -136,7 +148,7 @@ impl<T: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observab
 }
 
 impl<Derivation: Clone + Copy + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivation>
-    DerivedSignal<Derivation, Deps, F>
+    DerivedSignalData<Derivation, Deps, F>
 {
     pub fn maybe_recompute(&mut self) {
         // TODO: do we need to check deps?
@@ -174,12 +186,18 @@ fn main() {
         dbg!("value changed", n);
     });
 
-    {
-        let derivation = derived(&mut test_signal, |n| n + 1).clone();
-        derivation.borrow_mut().subscribe(|new| {
-            dbg!("Derivation changed to", new);
-        });
-    }
+    let mut derivation = derived(&mut test_signal, |n| n + 1);
+    derivation.subscribe(|new| {
+        dbg!("Derivation changed to", new);
+    });
+
+    let mut nested_derivation = derived(&mut derivation, |n| n * 2);
+    nested_derivation.subscribe(|new| {
+        dbg!("Nested derivation changed to", new);
+    });
+    nested_derivation.subscribe(|new| {
+        dbg!("Nested derivation changed to 2", new);
+    });
 
     // any kind of borrow here in a let seems to be the crashing line
 
