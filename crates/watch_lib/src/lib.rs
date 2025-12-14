@@ -305,7 +305,9 @@ impl UIContext {
 
         let mut doing_full_redraw = false;
 
-        'outermost: for id in self.elements_requesting_redraw.borrow().iter() {
+        let mut elements_requesting_redraw = self.elements_requesting_redraw.borrow_mut();
+
+        'outermost: for id in elements_requesting_redraw.iter() {
             let el = self.elements.get(*id).unwrap();
             // TODO: make parent context getting into a shared function
             let mut rect = el.get_bounding_rect();
@@ -328,13 +330,19 @@ impl UIContext {
             }
         }
 
-        for el in self.elements.data.iter().filter_map(|maybe_el| {
-            if let Some(el) = maybe_el {
-                Some(el)
-            } else {
-                None
-            }
-        }) {
+        for (id, el) in self
+            .elements
+            .data
+            .iter()
+            .enumerate()
+            .filter_map(|(i, maybe_el)| {
+                if let Some(el) = maybe_el {
+                    Some((i, el))
+                } else {
+                    None
+                }
+            })
+        {
             let mut rect = el.get_bounding_rect();
             let mut curr_parent_id = el.get_parent_id();
             while let Some(parent_id) = curr_parent_id {
@@ -346,10 +354,10 @@ impl UIContext {
             }
 
             // TODO: This should be empty most of the time - do we know that empty vectors are free?
-            // TODO: what if our source of truth was the list of changed pixels?
-            // (just redraw whole screen if list would get too big)
 
-            let pixel_positions = if doing_full_redraw {
+            // TODO: are there times when we'd want a different strategy? e.g. when size of element is smaller than size of changes, use first strategy?
+
+            let pixel_positions = if doing_full_redraw || elements_requesting_redraw.contains(&id) {
                 (rect.y..=(rect.y + rect.height as i16))
                     .flat_map(|y| {
                         (rect.x..=(rect.x + rect.width as i16)).map(move |x| (x as u8, y as u8))
@@ -392,7 +400,7 @@ impl UIContext {
             }
         }
 
-        self.elements_requesting_redraw.borrow_mut().clear();
+        elements_requesting_redraw.clear();
     }
 }
 
