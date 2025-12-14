@@ -60,13 +60,14 @@ fn main() {
 
     let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
     let root_id = ui_context.mount(RectUIElement::new(
+        None,
         BoundingRect {
             x: 39,
             y: 40,
             width: 100,
             height: 20,
         },
-        None,
+        1,
     ));
     ui_context.mount(TextUIElement::new(
         toggled,

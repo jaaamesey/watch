@@ -401,13 +401,18 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
 }
 
 pub struct RectUIElement {
-    rect: BoundingRect,
     parent_id: Option<usize>,
+    rect: BoundingRect,
+    color: u8,
 }
 
 impl RectUIElement {
-    pub fn new(rect: BoundingRect, parent_id: Option<usize>) -> RectUIElement {
-        RectUIElement { rect, parent_id }
+    pub fn new(parent_id: Option<usize>, rect: BoundingRect, color: u8) -> RectUIElement {
+        RectUIElement {
+            rect,
+            parent_id,
+            color,
+        }
     }
 }
 
@@ -418,9 +423,10 @@ impl UIElement for RectUIElement {
         ctx: &UIContext,
         sub_region: BoundingRect,
     ) -> Box<dyn Iterator<Item = u8>> {
+        let color = self.color;
         Box::new(
             (sub_region.y..=(sub_region.y + sub_region.height as i16)).flat_map(move |_| {
-                (sub_region.x..=(sub_region.x + sub_region.width as i16)).map(|_| 1)
+                (sub_region.x..=(sub_region.x + sub_region.width as i16)).map(move |_| color)
             }),
         )
     }
