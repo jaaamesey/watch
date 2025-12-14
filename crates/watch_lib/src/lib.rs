@@ -17,6 +17,7 @@ struct SignalData<T: Clone> {
     listeners: Vec<Option<Rc<RefCell<dyn FnMut(T)>>>>,
 }
 
+#[derive(Clone)]
 pub struct Signal<T: Clone> {
     data: Rc<RefCell<SignalData<T>>>,
 }
@@ -75,7 +76,7 @@ impl<T: Copy> Observable<T> for Signal<T> {
 pub fn derived<
     Computation: Clone + PartialEq + 'static,
     Compute: Fn(D0) -> Computation + 'static,
-    D0: Clone + Copy + 'static,
+    D0: Clone + 'static,
     OD0: Observable<D0>,
 >(
     dep0: &OD0,
@@ -101,8 +102,8 @@ pub fn derived<
 pub fn derived2<
     Computation: Clone + PartialEq + 'static,
     Compute: Fn((D0, D1)) -> Computation + 'static,
-    D0: Clone + Copy + 'static,
-    D1: Clone + Copy + 'static,
+    D0: Clone + 'static,
+    D1: Clone + 'static,
     OD0: Observable<D0>,
     OD1: Observable<D1>,
 >(
@@ -140,7 +141,7 @@ pub trait Observable<T> {
 
 struct DerivedSignalData<
     Derivation: Clone + PartialEq + 'static,
-    Deps: Clone + Copy + 'static,
+    Deps: Clone + 'static,
     F: Fn(Deps) -> Derivation + 'static,
 > {
     cache: Option<Derivation>,
@@ -151,13 +152,13 @@ struct DerivedSignalData<
 
 pub struct DerivedSignal<
     Derivation: Clone + PartialEq + 'static,
-    Deps: Clone + Copy + 'static,
+    Deps: Clone + 'static,
     F: Fn(Deps) -> Derivation + 'static,
 > {
     data: Rc<RefCell<DerivedSignalData<Derivation, Deps, F>>>,
 }
 
-impl<T: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
+impl<T: Clone + PartialEq, Deps: Clone, F: Fn(Deps) -> T> Observable<T>
     for DerivedSignal<T, Deps, F>
 {
     fn peek(&self) -> T {
@@ -165,7 +166,7 @@ impl<T: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
         if let Some(val) = &data.cache {
             return val.clone();
         }
-        data.cache = Some((data.compute)(data.deps));
+        data.cache = Some((data.compute)(data.deps.clone()));
         data.cache.clone().unwrap()
     }
 
@@ -190,7 +191,7 @@ impl<T: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> T> Observable<T>
     }
 }
 
-impl<Derivation: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivation>
+impl<Derivation: Clone + PartialEq, Deps: Clone, F: Fn(Deps) -> Derivation>
     DerivedSignalData<Derivation, Deps, F>
 {
     pub fn maybe_recompute(&mut self) {
@@ -200,7 +201,7 @@ impl<Derivation: Clone + PartialEq, Deps: Clone + Copy, F: Fn(Deps) -> Derivatio
             return;
         }
         let prev = self.cache.clone();
-        self.cache = Some((self.compute)(self.deps));
+        self.cache = Some((self.compute)(self.deps.clone()));
         // TODO: have a way to skip this for large things?
         if prev == self.cache {
             return;
@@ -292,10 +293,27 @@ impl UIContext {
         &self.screen_buffer
     }
     pub fn handle_draw_requests(&mut self) {
+        let mut pixels_needing_redraw = alloc::vec![0 as u8; self.screen_buffer.len()];
+
+        // TODO: should we skip this if only one element needs a redraw?
         for id in self.elements_requesting_redraw.borrow().iter() {
             let el = self.elements.get(*id).unwrap();
-            // TODO: redraw els behind (if not already in this list - actually maybe we need a sorting strategy)
-            // (or maybe elements requesting redraw just determines a bounding box to redraw??? idk)
+            let rect = el.get_bounding_rect();
+            // TODO: handle screen limits
+            for y in rect.y..=(rect.y + rect.height as i16) {
+                for x in rect.x..=(rect.x + rect.width as i16) {
+                    set_bit_buffer_pixel(&mut pixels_needing_redraw, x as u8, y as u8, 1);
+                }
+            }
+        }
+
+        for el in self.elements.data.iter().filter_map(|maybe_el| {
+            if let Some(el) = maybe_el {
+                Some(el)
+            } else {
+                None
+            }
+        }) {
             let source_rect = el.get_bounding_rect();
             let mut rect = source_rect;
 
@@ -308,35 +326,42 @@ impl UIContext {
                 curr_parent_id = parent_el.get_parent_id();
             }
 
-            let element_space_rect = BoundingRect {
-                x: 0,
-                y: 0,
-                width: source_rect.width,
-                height: source_rect.height,
-            };
+            // TODO: This should be empty most of the time - do we know that empty vectors are free?
+            let pixel_positions = (rect.y..=(rect.y + rect.height as i16))
+                .flat_map(|y| {
+                    let prd = &pixels_needing_redraw;
+                    (rect.x..=(rect.x + rect.width as i16)).filter_map(move |x| {
+                        if get_bit_buffer_pixel(&prd, x as u8, y as u8) {
+                            Some(((x - rect.x) as u8, (y - rect.y) as u8))
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
 
-            let mut pixel_iter = el.get_pixels(self, element_space_rect);
-            for y in rect.y..=(rect.y + rect.height as i16) {
-                for x in rect.x..=(rect.x + rect.width as i16) {
-                    if let Some(pixel) = pixel_iter.next() {
-                        if y >= SCREEN_HEIGHT as i16 || y < 0 || x >= SCREEN_WIDTH as i16 || x < 0 {
-                            continue;
-                        }
-                        let screen_width = SCREEN_WIDTH as usize;
-                        let idx = (y as usize) * screen_width + (x as usize);
-                        let byte_idx = idx / 8;
-                        let bit_idx = 7 - (idx % 8);
-                        if byte_idx < self.screen_buffer.len() {
-                            if pixel != 0 {
-                                self.screen_buffer[byte_idx] |= 1 << bit_idx;
-                            } else {
-                                self.screen_buffer[byte_idx] &= !(1 << bit_idx);
-                            }
-                        }
+            for (pixel, (x, y)) in el
+                // we clone because rust is a deeply unserious language
+                .get_pixels(self, Box::new(pixel_positions.clone().into_iter()))
+                .zip(
+                    pixel_positions
+                        .into_iter()
+                        .map(|(x, y)| (x as i16 + rect.x, y as i16 + rect.y)),
+                )
+            {
+                let idx = (y as usize) * (SCREEN_WIDTH as usize) + (x as usize);
+                let byte_idx = idx / 8;
+                let bit_idx = 7 - (idx % 8);
+                if byte_idx < self.screen_buffer.len() {
+                    if pixel != 0 {
+                        self.screen_buffer[byte_idx] |= 1 << bit_idx;
+                    } else {
+                        self.screen_buffer[byte_idx] &= !(1 << bit_idx);
                     }
                 }
             }
         }
+
         self.elements_requesting_redraw.borrow_mut().clear();
     }
 }
@@ -344,8 +369,11 @@ impl UIContext {
 pub trait UIElement {
     fn mount_to_context(&self, ctx: &UIContext, id: usize);
     // Coordinates are in element space. width and height describes size of drawn region, not size of element
-    fn get_pixels(&self, ctx: &UIContext, sub_region: BoundingRect)
-    -> Box<dyn Iterator<Item = u8>>;
+    fn get_pixels(
+        &self,
+        ctx: &UIContext,
+        iterator: Box<dyn Iterator<Item = (u8, u8)>>,
+    ) -> Box<dyn Iterator<Item = u8>>;
     fn get_bounding_rect(&self) -> BoundingRect;
     fn get_parent_id(&self) -> Option<usize>;
 }
@@ -386,7 +414,7 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
     fn get_pixels(
         &self,
         ctx: &UIContext,
-        sub_region: BoundingRect,
+        requested_pixels: Box<dyn Iterator<Item = (u8, u8)>>,
     ) -> Box<dyn Iterator<Item = u8>> {
         let text = self.text.peek();
         let font = &ctx.font;
@@ -394,39 +422,33 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
         let char_height = 8 as usize;
 
         let text = text.clone();
-        let vec = (sub_region.y..=(sub_region.y + sub_region.height as i16))
-            .flat_map(move |y| {
-                (sub_region.x..=(sub_region.x + sub_region.width as i16)).map({
-                    let value = text.clone();
-                    move |x| {
-                        if y < 0 || x < 0 || (y as usize) >= char_height {
-                            return 0;
-                        }
-                        let y = y as usize;
-                        let x = x as usize;
+        let iter = requested_pixels.map(|(x, y)| {
+            let value = text.clone();
+            if y < 0 || x < 0 || (y as usize) >= char_height {
+                return 0;
+            }
+            let y = y as usize;
+            let x = x as usize;
 
-                        let char_idx = x / char_width;
-                        let col = x % char_width;
-                        let row = y % char_height;
+            let char_idx = x / char_width;
+            let col = x % char_width;
+            let row = y % char_height;
 
-                        let c_option = value.chars().nth(char_idx);
-                        if let Some(c) = c_option {
-                            let glyph = font.get(c).unwrap_or_default();
-                            let row_bits = glyph[row].reverse_bits();
-                            if (row_bits & (1 << (7 - col))) != 0 {
-                                1
-                            } else {
-                                0
-                            }
-                        } else {
-                            0
-                        }
-                    }
-                })
-            })
-            .collect::<Vec<u8>>();
+            let c_option = value.chars().nth(char_idx);
+            if let Some(c) = c_option {
+                let glyph = font.get(c).unwrap_or_default();
+                let row_bits = glyph[row].reverse_bits();
+                if (row_bits & (1 << (7 - col))) != 0 {
+                    1
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        });
 
-        Box::new(vec.into_iter())
+        Box::new(iter.collect::<Vec<_>>().into_iter())
     }
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
@@ -457,14 +479,10 @@ impl UIElement for RectUIElement {
     fn get_pixels(
         &self,
         ctx: &UIContext,
-        sub_region: BoundingRect,
+        requested_pixels: Box<dyn Iterator<Item = (u8, u8)>>,
     ) -> Box<dyn Iterator<Item = u8>> {
         let color = self.color;
-        Box::new(
-            (sub_region.y..=(sub_region.y + sub_region.height as i16)).flat_map(move |_| {
-                (sub_region.x..=(sub_region.x + sub_region.width as i16)).map(move |_| color)
-            }),
-        )
+        Box::new(requested_pixels.map(move |_| color))
     }
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
@@ -472,4 +490,32 @@ impl UIElement for RectUIElement {
     fn get_parent_id(&self) -> Option<usize> {
         self.parent_id
     }
+}
+
+fn set_bit_buffer_pixel(buffer: &mut [u8], x: u8, y: u8, color: u8) {
+    if x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT {
+        return;
+    }
+    let byte_index = y as usize * (SCREEN_WIDTH as usize / 8) + (x as usize / 8);
+    let bit_index = 7 - (x % 8);
+
+    if color == 1 {
+        buffer[byte_index] |= 1 << bit_index;
+    } else {
+        buffer[byte_index] &= !(1 << bit_index);
+    }
+}
+
+fn get_bit_buffer_pixel(buffer: &[u8], x: u8, y: u8) -> bool {
+    if x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT {
+        return false;
+    }
+    let byte_index = y as usize * (SCREEN_WIDTH as usize / 8) + (x as usize / 8);
+    let bit_index = 7 - (x % 8);
+
+    if byte_index >= buffer.len() {
+        return false;
+    }
+
+    (buffer[byte_index] >> bit_index) & 1 == 1
 }

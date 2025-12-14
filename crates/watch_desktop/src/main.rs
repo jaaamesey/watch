@@ -60,19 +60,40 @@ fn main() {
     let root_id = ui_context.mount(RectUIElement::new(
         None,
         BoundingRect {
-            x: 39,
-            y: 40,
-            width: 100,
-            height: 20,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
         },
         1,
     ));
     ui_context.mount(TextUIElement::new(
         toggled,
         BoundingRect {
-            x: -42,
-            y: 16,
+            x: 90,
+            y: 76,
             width: 65,
+            height: 20,
+        },
+        root_id,
+    ));
+    ui_context.mount(RectUIElement::new(
+        None,
+        BoundingRect {
+            x: 80,
+            y: 80,
+            width: 100,
+            height: 100,
+        },
+        1,
+    ));
+    let c = derived(&counter, |_| "should be above".to_string());
+    ui_context.mount(TextUIElement::new(
+        c,
+        BoundingRect {
+            x: 100,
+            y: 100,
+            width: 100,
             height: 20,
         },
         root_id,
