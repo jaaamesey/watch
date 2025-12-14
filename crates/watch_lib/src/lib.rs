@@ -280,11 +280,12 @@ impl UIContext {
             screen_buffer: alloc::vec![0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8],
         }
     }
-    pub fn mount<El: UIElement + 'static>(&mut self, element: El) {
+    pub fn mount<El: UIElement + 'static>(&mut self, element: El) -> usize {
         let id = self.elements.add(Box::new(element));
         self.elements_requesting_redraw.borrow_mut().insert(id);
         let el = self.elements.get(id).unwrap();
         el.mount_to_context(self, id);
+        id
     }
     pub fn get_screen_buffer(&self) -> &Vec<u8> {
         &self.screen_buffer
@@ -294,10 +295,21 @@ impl UIContext {
             let el = self.elements.get(*id).unwrap();
             // TODO: redraw els behind (if not already in this list - actually maybe we need a sorting strategy)
             // (or maybe elements requesting redraw just determines a bounding box to redraw??? idk)
-            let rect = el.get_bounding_rect();
+            let source_rect = el.get_bounding_rect();
+            let mut rect = source_rect;
+
+            let mut curr_parent_id = el.get_parent_id();
+            while let Some(parent_id) = curr_parent_id {
+                let parent_el = self.elements.get(parent_id).unwrap();
+                let parent_rect = parent_el.get_bounding_rect();
+                rect.x += parent_rect.x;
+                rect.y += parent_rect.y;
+                curr_parent_id = parent_el.get_parent_id();
+            }
+
             let mut pixel_iter = el.get_pixels(self, rect);
-            for y in rect.y..=(rect.y + rect.height) {
-                for x in rect.x..=(rect.x + rect.width) {
+            for y in rect.y..=(rect.y + rect.height as i16) {
+                for x in rect.x..=(rect.x + rect.width as i16) {
                     if let Some(pixel) = pixel_iter.next() {
                         let screen_width = SCREEN_WIDTH as usize;
                         let idx = (y as usize) * screen_width + (x as usize);
@@ -323,25 +335,31 @@ pub trait UIElement {
     // Coordinates are in element space
     fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>>;
     fn get_bounding_rect(&self) -> BoundingRect;
+    fn get_parent_id(&self) -> Option<usize>;
+}
+
+#[derive(Clone, Copy)]
+pub struct BoundingRect {
+    pub x: i16,
+    pub y: i16,
+    pub width: u8,
+    pub height: u8,
 }
 
 pub struct TextUIElement<TextObservable: Observable<String>> {
     text: TextObservable,
     rect: BoundingRect,
+    parent_id: usize,
 }
 
 impl<TO: Observable<String>> TextUIElement<TO> {
-    pub fn new(text: TO, rect: BoundingRect) -> TextUIElement<TO> {
-        TextUIElement { text, rect }
+    pub fn new(text: TO, rect: BoundingRect, parent_id: usize) -> TextUIElement<TO> {
+        TextUIElement {
+            text,
+            rect,
+            parent_id,
+        }
     }
-}
-
-#[derive(Clone, Copy)]
-pub struct BoundingRect {
-    pub x: u8,
-    pub y: u8,
-    pub width: u8,
-    pub height: u8,
 }
 
 impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
@@ -355,11 +373,42 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
     }
     fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>> {
         let toggled = self.text.peek() == "on";
-        Box::new((rect.y..=(rect.y + rect.height)).flat_map(move |y| {
-            (rect.x..=(rect.x + rect.width)).map(move |x| if toggled && x % 2 == 0 { 1 } else { 0 })
+        Box::new((rect.y..=(rect.y + rect.height as i16)).flat_map(move |y| {
+            (rect.x..=(rect.x + rect.width as i16))
+                .map(move |x| if toggled && x % 2 == 0 { 1 } else { 0 })
         }))
     }
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
+    }
+    fn get_parent_id(&self) -> Option<usize> {
+        Some(self.parent_id)
+    }
+}
+
+pub struct RectUIElement {
+    rect: BoundingRect,
+    parent_id: Option<usize>,
+}
+
+impl RectUIElement {
+    pub fn new(rect: BoundingRect, parent_id: Option<usize>) -> RectUIElement {
+        RectUIElement { rect, parent_id }
+    }
+}
+
+impl UIElement for RectUIElement {
+    fn mount_to_context(&self, ctx: &UIContext, id: usize) {}
+    fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>> {
+        Box::new(
+            (rect.y..=(rect.y + rect.height as i16))
+                .flat_map(move |_| (rect.x..=(rect.x + rect.width as i16)).map(|_| 1)),
+        )
+    }
+    fn get_bounding_rect(&self) -> BoundingRect {
+        self.rect
+    }
+    fn get_parent_id(&self) -> Option<usize> {
+        self.parent_id
     }
 }

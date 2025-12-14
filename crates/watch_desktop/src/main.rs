@@ -1,7 +1,10 @@
+use std::os::unix::process::parent_id;
+
 use font8x8::{self, UnicodeFonts};
 use minifb;
 use watch_lib::{
-    self, BoundingRect, Observable, Signal, TextUIElement, UIContext, derived, derived2,
+    self, BoundingRect, Observable, RectUIElement, Signal, TextUIElement, UIContext, derived,
+    derived2,
 };
 
 const SCREEN_WIDTH: u8 = 200;
@@ -56,16 +59,25 @@ fn main() {
     });
 
     let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
-    let text_el = TextUIElement::new(
+    let root_id = ui_context.mount(RectUIElement::new(
+        BoundingRect {
+            x: 40,
+            y: 40,
+            width: 100,
+            height: 100,
+        },
+        None,
+    ));
+    ui_context.mount(TextUIElement::new(
         toggled,
         BoundingRect {
-            x: 8,
+            x: -10,
             y: 16,
             width: 64,
             height: 20,
         },
-    );
-    ui_context.mount(text_el);
+        root_id,
+    ));
 
     // set_pixel(&mut screen_buffer, 1, 1, 1);
     // set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
