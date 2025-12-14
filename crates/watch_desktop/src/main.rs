@@ -70,7 +70,7 @@ fn main() {
     ui_context.mount(TextUIElement::new(
         toggled,
         BoundingRect {
-            x: 27,
+            x: -42,
             y: 16,
             width: 65,
             height: 20,

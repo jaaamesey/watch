@@ -316,9 +316,12 @@ impl UIContext {
             };
 
             let mut pixel_iter = el.get_pixels(self, element_space_rect);
-            for y in rect.y.max(0)..=(rect.y + rect.height as i16).min(SCREEN_HEIGHT as i16) {
-                for x in rect.x.max(0)..=(rect.x + rect.width as i16).min(SCREEN_WIDTH as i16) {
+            for y in rect.y..=(rect.y + rect.height as i16) {
+                for x in rect.x..=(rect.x + rect.width as i16) {
                     if let Some(pixel) = pixel_iter.next() {
+                        if y >= SCREEN_HEIGHT as i16 || y < 0 || x >= SCREEN_WIDTH as i16 || x < 0 {
+                            continue;
+                        }
                         let screen_width = SCREEN_WIDTH as usize;
                         let idx = (y as usize) * screen_width + (x as usize);
                         let byte_idx = idx / 8;
