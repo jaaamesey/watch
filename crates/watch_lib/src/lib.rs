@@ -298,14 +298,13 @@ impl UIContext {
         &self.screen_buffer
     }
     pub fn handle_draw_requests(&mut self) {
+        let mut elements_requesting_redraw = self.elements_requesting_redraw.borrow_mut();
         // A quarter of the screen is the largest amount that can be partially updated - otherwise, we do a full update
         let mut pixels_needing_redraw = HashSet::<(u8, u8)>::with_capacity(
             (SCREEN_HEIGHT as usize * SCREEN_WIDTH as usize) / 4,
         );
 
-        let mut doing_full_redraw = false;
-
-        let mut elements_requesting_redraw = self.elements_requesting_redraw.borrow_mut();
+        let mut doing_full_redraw = elements_requesting_redraw.len() > 16;
 
         'outermost: for id in elements_requesting_redraw.iter() {
             let el = self.elements.get(*id).unwrap();
@@ -353,7 +352,19 @@ impl UIContext {
                 curr_parent_id = parent_el.get_parent_id();
             }
 
-            // TODO: This should be empty most of the time - do we know that empty vectors are free?
+            if !doing_full_redraw
+                && !elements_requesting_redraw.contains(&id)
+                && !elements_requesting_redraw.iter().any(|other_id| {
+                    return self
+                        .elements
+                        .get(*other_id)
+                        .unwrap()
+                        .get_bounding_rect()
+                        .overlaps(&rect);
+                })
+            {
+                continue;
+            }
 
             // TODO: are there times when we'd want a different strategy? e.g. when size of element is smaller than size of changes, use first strategy?
 
@@ -430,6 +441,12 @@ impl BoundingRect {
             && px < self.x + self.width as i16
             && py >= self.y
             && py < self.y + self.height as i16
+    }
+    pub fn overlaps(&self, other: &BoundingRect) -> bool {
+        self.x < other.x + other.width as i16
+            && self.x + self.width as i16 > other.x
+            && self.y < other.y + other.height as i16
+            && self.y + self.height as i16 > other.y
     }
 }
 
