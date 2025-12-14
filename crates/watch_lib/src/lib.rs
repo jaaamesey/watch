@@ -300,6 +300,8 @@ impl UIContext {
     pub fn handle_draw_requests(&mut self) {
         let mut pixels_needing_redraw = alloc::vec![0 as u8; self.screen_buffer.len()];
 
+        // save vector here of pixels needing redraw as coordinates - exit early if getting too big (>50% of screen) and a full redraw would be better
+
         // TODO: should we skip this if only one element needs a redraw?
         for id in self.elements_requesting_redraw.borrow().iter() {
             let el = self.elements.get(*id).unwrap();
@@ -332,6 +334,11 @@ impl UIContext {
             }
 
             // TODO: This should be empty most of the time - do we know that empty vectors are free?
+            // TODO: what if our source of truth was the list of changed pixels?
+            // (just redraw whole screen if list would get too big)
+
+            // TODO: make this just filter full list of changed pixels for ones that are actually in the rect
+
             let pixel_positions = (rect.y..=(rect.y + rect.height as i16))
                 .flat_map(|y| {
                     let prd = &pixels_needing_redraw;
