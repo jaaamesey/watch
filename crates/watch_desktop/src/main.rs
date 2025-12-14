@@ -1,6 +1,4 @@
-use std::os::unix::process::parent_id;
-
-use font8x8::{self, UnicodeFonts};
+use font8x8::{self};
 use minifb;
 use watch_lib::{
     self, BoundingRect, Observable, RectUIElement, Signal, TextUIElement, UIContext, derived,
@@ -150,40 +148,5 @@ fn set_pixel(buffer: &mut [u8], x: u8, y: u8, color: u8) {
         buffer[byte_index] |= 1 << bit_index;
     } else {
         buffer[byte_index] &= !(1 << bit_index);
-    }
-}
-
-fn draw_text(
-    buffer: &mut [u8],
-    font: &font8x8::unicode::BasicFonts,
-    text: &str,
-    x_transform: u8,
-    y_transform: u8,
-    color: u8,
-) {
-    let char_width = 8;
-    for (char_idx, c) in text.chars().enumerate() {
-        let glyph = font.get(c).unwrap_or_default();
-        for (row, row_bits) in glyph.iter().map(|byte| byte.reverse_bits()).enumerate() {
-            let y = y_transform as usize + row;
-            if y >= SCREEN_HEIGHT as usize {
-                continue;
-            }
-            for col in 0..char_width {
-                let x = x_transform as usize + char_idx * char_width + col;
-                if x >= SCREEN_WIDTH as usize {
-                    continue;
-                }
-                if (row_bits & (1 << (7 - col))) != 0 {
-                    let byte_index = y * (SCREEN_WIDTH as usize / 8) + (x / 8);
-                    let bit_index = 7 - (x % 8);
-                    if color == 1 {
-                        buffer[byte_index] |= 1 << bit_index;
-                    } else {
-                        buffer[byte_index] &= !(1 << bit_index);
-                    }
-                }
-            }
-        }
     }
 }

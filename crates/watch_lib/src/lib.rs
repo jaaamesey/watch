@@ -5,6 +5,7 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use font8x8::UnicodeFonts;
 use hashbrown::HashSet;
 
 pub const SCREEN_WIDTH: u8 = 200;
@@ -384,13 +385,45 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
         ctx: &UIContext,
         sub_region: BoundingRect,
     ) -> Box<dyn Iterator<Item = u8>> {
-        let toggled = self.text.peek() == "on";
-        Box::new(
-            (sub_region.y..=(sub_region.y + sub_region.height as i16)).flat_map(move |y| {
-                (sub_region.x..=(sub_region.x + sub_region.width as i16))
-                    .map(move |x| if toggled && x % 2 == 0 { 1 } else { 0 })
-            }),
-        )
+        let text = self.text.peek();
+        let font = &ctx.font;
+        let char_width = 8 as usize;
+        let char_height = 8 as usize;
+
+        let text = text.clone();
+        let vec = (sub_region.y..=(sub_region.y + sub_region.height as i16))
+            .flat_map(move |y| {
+                (sub_region.x..=(sub_region.x + sub_region.width as i16)).map({
+                    let value = text.clone();
+                    move |x| {
+                        if y < 0 || x < 0 || (y as usize) >= char_height {
+                            return 0;
+                        }
+                        let y = y as usize;
+                        let x = x as usize;
+
+                        let char_idx = x / char_width;
+                        let col = x % char_width;
+                        let row = y % char_height;
+
+                        let c_option = value.chars().nth(char_idx);
+                        if let Some(c) = c_option {
+                            let glyph = font.get(c).unwrap_or_default();
+                            let row_bits = glyph[row].reverse_bits();
+                            if (row_bits & (1 << (7 - col))) != 0 {
+                                1
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<u8>>();
+
+        Box::new(vec.into_iter())
     }
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
