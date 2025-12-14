@@ -298,18 +298,32 @@ impl UIContext {
         &self.screen_buffer
     }
     pub fn handle_draw_requests(&mut self) {
-        let mut pixels_needing_redraw = alloc::vec![0 as u8; self.screen_buffer.len()];
+        // A quarter of the screen is the largest amount that can be partially updated - otherwise, we do a full update
+        let mut pixels_needing_redraw = HashSet::<(u8, u8)>::with_capacity(
+            (SCREEN_HEIGHT as usize * SCREEN_WIDTH as usize) / 4,
+        );
 
-        // save vector here of pixels needing redraw as coordinates - exit early if getting too big (>50% of screen) and a full redraw would be better
+        let mut doing_full_redraw = false;
 
-        // TODO: should we skip this if only one element needs a redraw?
-        for id in self.elements_requesting_redraw.borrow().iter() {
+        'outermost: for id in self.elements_requesting_redraw.borrow().iter() {
             let el = self.elements.get(*id).unwrap();
-            let rect = el.get_bounding_rect();
-            // TODO: handle screen limits
+            // TODO: make parent context getting into a shared function
+            let mut rect = el.get_bounding_rect();
+            let mut curr_parent_id = el.get_parent_id();
+            while let Some(parent_id) = curr_parent_id {
+                let parent_el = self.elements.get(parent_id).unwrap();
+                let parent_rect = parent_el.get_bounding_rect();
+                rect.x += parent_rect.x;
+                rect.y += parent_rect.y;
+                curr_parent_id = parent_el.get_parent_id();
+            }
             for y in rect.y..=(rect.y + rect.height as i16) {
                 for x in rect.x..=(rect.x + rect.width as i16) {
-                    set_bit_buffer_pixel(&mut pixels_needing_redraw, x as u8, y as u8, 1);
+                    if pixels_needing_redraw.len() >= pixels_needing_redraw.capacity() {
+                        doing_full_redraw = true;
+                        break 'outermost;
+                    }
+                    pixels_needing_redraw.insert((x as u8, y as u8));
                 }
             }
         }
@@ -321,9 +335,7 @@ impl UIContext {
                 None
             }
         }) {
-            let source_rect = el.get_bounding_rect();
-            let mut rect = source_rect;
-
+            let mut rect = el.get_bounding_rect();
             let mut curr_parent_id = el.get_parent_id();
             while let Some(parent_id) = curr_parent_id {
                 let parent_el = self.elements.get(parent_id).unwrap();
@@ -337,29 +349,35 @@ impl UIContext {
             // TODO: what if our source of truth was the list of changed pixels?
             // (just redraw whole screen if list would get too big)
 
-            // TODO: make this just filter full list of changed pixels for ones that are actually in the rect
-
-            let pixel_positions = (rect.y..=(rect.y + rect.height as i16))
-                .flat_map(|y| {
-                    let prd = &pixels_needing_redraw;
-                    (rect.x..=(rect.x + rect.width as i16)).filter_map(move |x| {
-                        if get_bit_buffer_pixel(&prd, x as u8, y as u8) {
-                            Some(((x - rect.x) as u8, (y - rect.y) as u8))
+            let pixel_positions = if doing_full_redraw {
+                (rect.y..=(rect.y + rect.height as i16))
+                    .flat_map(|y| {
+                        (rect.x..=(rect.x + rect.width as i16)).map(move |x| (x as u8, y as u8))
+                    })
+                    .collect()
+            } else {
+                pixels_needing_redraw
+                    .iter()
+                    .filter_map(|(x, y)| {
+                        if rect.contains_point(*x as i16, *y as i16) {
+                            Some((*x, *y))
                         } else {
                             None
                         }
                     })
-                })
+                    .collect::<Vec<_>>()
+            };
+            // we clone because rust is a deeply unserious language
+            let ppc = pixel_positions.clone();
+
+            let pixel_positions_element_space = pixel_positions
+                .into_iter()
+                .map(|(x, y)| ((x as i16 - rect.x) as u8, (y as i16 - rect.y) as u8))
                 .collect::<Vec<_>>();
 
             for (pixel, (x, y)) in el
-                // we clone because rust is a deeply unserious language
-                .get_pixels(self, Box::new(pixel_positions.clone().into_iter()))
-                .zip(
-                    pixel_positions
-                        .into_iter()
-                        .map(|(x, y)| (x as i16 + rect.x, y as i16 + rect.y)),
-                )
+                .get_pixels(self, Box::new(pixel_positions_element_space.into_iter()))
+                .zip(ppc)
             {
                 let idx = (y as usize) * (SCREEN_WIDTH as usize) + (x as usize);
                 let byte_idx = idx / 8;
@@ -396,6 +414,15 @@ pub struct BoundingRect {
     pub y: i16,
     pub width: u8,
     pub height: u8,
+}
+
+impl BoundingRect {
+    pub fn contains_point(&self, px: i16, py: i16) -> bool {
+        px >= self.x
+            && px < self.x + self.width as i16
+            && py >= self.y
+            && py < self.y + self.height as i16
+    }
 }
 
 pub struct TextUIElement<TextObservable: Observable<String>> {
@@ -436,7 +463,7 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
         let text = text.clone();
         let iter = requested_pixels.map(|(x, y)| {
             let value = text.clone();
-            if y < 0 || x < 0 || (y as usize) >= char_height {
+            if y as usize >= char_height {
                 return 0;
             }
             let y = y as usize;
