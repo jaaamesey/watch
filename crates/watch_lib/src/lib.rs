@@ -17,12 +17,14 @@ struct SignalData<T: Clone> {
     listeners: Vec<Option<Rc<RefCell<dyn FnMut(T)>>>>,
 }
 
+// Signals are just "lightweight" containers of pointers - should be safe and cheap to clone.
+// They're reference counted, but we encapsulate that fact internally.
 #[derive(Clone)]
 pub struct Signal<T: Clone> {
     data: Rc<RefCell<SignalData<T>>>,
 }
 
-impl<T: Copy + PartialEq> Signal<T> {
+impl<T: Clone + PartialEq> Signal<T> {
     pub fn set(&self, value: T) {
         let prev = self.peek();
         if value == prev {
@@ -32,7 +34,7 @@ impl<T: Copy + PartialEq> Signal<T> {
         data.value = value;
         for i in 0..data.listeners.len() {
             if let Some(listener) = &data.listeners[i] {
-                (listener.borrow_mut())(value);
+                (listener.borrow_mut())(data.value.clone());
             }
         }
     }
@@ -46,9 +48,9 @@ impl<T: Copy + PartialEq> Signal<T> {
     }
 }
 
-impl<T: Copy> Observable<T> for Signal<T> {
+impl<T: Clone> Observable<T> for Signal<T> {
     fn peek(&self) -> T {
-        self.data.borrow().value
+        self.data.borrow().value.clone()
     }
     fn subscribe<F: FnMut(T) + 'static>(&self, on_change: F) -> usize {
         let mut data = self.data.borrow_mut();
@@ -133,7 +135,7 @@ pub fn derived2<
     ds
 }
 
-pub trait Observable<T> {
+pub trait Observable<T>: Clone {
     fn peek(&self) -> T;
     fn subscribe<F: FnMut(T) + 'static>(&self, on_change: F) -> usize;
     fn unsubscribe(&self, id: usize);
@@ -150,6 +152,7 @@ struct DerivedSignalData<
     listeners: Vec<Option<Rc<RefCell<dyn FnMut(Derivation)>>>>,
 }
 
+#[derive(Clone)]
 pub struct DerivedSignal<
     Derivation: Clone + PartialEq + 'static,
     Deps: Clone + 'static,
@@ -158,7 +161,7 @@ pub struct DerivedSignal<
     data: Rc<RefCell<DerivedSignalData<Derivation, Deps, F>>>,
 }
 
-impl<T: Clone + PartialEq, Deps: Clone, F: Fn(Deps) -> T> Observable<T>
+impl<T: Clone + PartialEq, Deps: Clone, F: Clone + Fn(Deps) -> T> Observable<T>
     for DerivedSignal<T, Deps, F>
 {
     fn peek(&self) -> T {
@@ -248,6 +251,8 @@ impl<V> ArbitraryIdStore<V> {
         }
     }
 }
+
+#[derive(Clone)]
 pub struct Constant<T: Clone> {
     value: T,
 }
@@ -393,9 +398,9 @@ pub struct TextUIElement<TextObservable: Observable<String>> {
 }
 
 impl<TO: Observable<String>> TextUIElement<TO> {
-    pub fn new(text: TO, rect: BoundingRect, parent_id: usize) -> TextUIElement<TO> {
+    pub fn new(text: &TO, rect: BoundingRect, parent_id: usize) -> TextUIElement<TO> {
         TextUIElement {
-            text,
+            text: text.clone(),
             rect,
             parent_id,
         }

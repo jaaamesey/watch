@@ -68,7 +68,7 @@ fn main() {
         1,
     ));
     ui_context.mount(TextUIElement::new(
-        toggled,
+        &toggled,
         BoundingRect {
             x: 90,
             y: 76,
@@ -89,7 +89,17 @@ fn main() {
     ));
     let c = derived(&counter, |_| "should be above".to_string());
     ui_context.mount(TextUIElement::new(
-        c,
+        &c,
+        BoundingRect {
+            x: 100,
+            y: 100,
+            width: 100,
+            height: 20,
+        },
+        root_id,
+    ));
+    ui_context.mount(TextUIElement::new(
+        &toggled,
         BoundingRect {
             x: 100,
             y: 100,
