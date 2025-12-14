@@ -307,7 +307,14 @@ impl UIContext {
                 curr_parent_id = parent_el.get_parent_id();
             }
 
-            let mut pixel_iter = el.get_pixels(self, source_rect);
+            let element_space_rect = BoundingRect {
+                x: 0,
+                y: 0,
+                width: source_rect.width,
+                height: source_rect.height,
+            };
+
+            let mut pixel_iter = el.get_pixels(self, element_space_rect);
             for y in rect.y.max(0)..=(rect.y + rect.height as i16).min(SCREEN_HEIGHT as i16) {
                 for x in rect.x.max(0)..=(rect.x + rect.width as i16).min(SCREEN_WIDTH as i16) {
                     if let Some(pixel) = pixel_iter.next() {
@@ -332,8 +339,9 @@ impl UIContext {
 
 pub trait UIElement {
     fn mount_to_context(&self, ctx: &UIContext, id: usize);
-    // Coordinates are in element space
-    fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>>;
+    // Coordinates are in element space. width and height describes size of drawn region, not size of element
+    fn get_pixels(&self, ctx: &UIContext, sub_region: BoundingRect)
+    -> Box<dyn Iterator<Item = u8>>;
     fn get_bounding_rect(&self) -> BoundingRect;
     fn get_parent_id(&self) -> Option<usize>;
 }
@@ -371,12 +379,18 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
             ctx_borrowed.insert(id);
         });
     }
-    fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>> {
+    fn get_pixels(
+        &self,
+        ctx: &UIContext,
+        sub_region: BoundingRect,
+    ) -> Box<dyn Iterator<Item = u8>> {
         let toggled = self.text.peek() == "on";
-        Box::new((rect.y..=(rect.y + rect.height as i16)).flat_map(move |y| {
-            (rect.x..=(rect.x + rect.width as i16))
-                .map(move |x| if toggled && x % 2 == 0 { 1 } else { 0 })
-        }))
+        Box::new(
+            (sub_region.y..=(sub_region.y + sub_region.height as i16)).flat_map(move |y| {
+                (sub_region.x..=(sub_region.x + sub_region.width as i16))
+                    .map(move |x| if toggled && x % 2 == 0 { 1 } else { 0 })
+            }),
+        )
     }
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
@@ -399,10 +413,15 @@ impl RectUIElement {
 
 impl UIElement for RectUIElement {
     fn mount_to_context(&self, ctx: &UIContext, id: usize) {}
-    fn get_pixels(&self, ctx: &UIContext, rect: BoundingRect) -> Box<dyn Iterator<Item = u8>> {
+    fn get_pixels(
+        &self,
+        ctx: &UIContext,
+        sub_region: BoundingRect,
+    ) -> Box<dyn Iterator<Item = u8>> {
         Box::new(
-            (rect.y..=(rect.y + rect.height as i16))
-                .flat_map(move |_| (rect.x..=(rect.x + rect.width as i16)).map(|_| 1)),
+            (sub_region.y..=(sub_region.y + sub_region.height as i16)).flat_map(move |_| {
+                (sub_region.x..=(sub_region.x + sub_region.width as i16)).map(|_| 1)
+            }),
         )
     }
     fn get_bounding_rect(&self) -> BoundingRect {
