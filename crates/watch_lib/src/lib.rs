@@ -307,9 +307,9 @@ impl UIContext {
                 curr_parent_id = parent_el.get_parent_id();
             }
 
-            let mut pixel_iter = el.get_pixels(self, rect);
-            for y in rect.y..=(rect.y + rect.height as i16) {
-                for x in rect.x..=(rect.x + rect.width as i16) {
+            let mut pixel_iter = el.get_pixels(self, source_rect);
+            for y in rect.y.max(0)..=(rect.y + rect.height as i16).min(SCREEN_HEIGHT as i16) {
+                for x in rect.x.max(0)..=(rect.x + rect.width as i16).min(SCREEN_WIDTH as i16) {
                     if let Some(pixel) = pixel_iter.next() {
                         let screen_width = SCREEN_WIDTH as usize;
                         let idx = (y as usize) * screen_width + (x as usize);
