@@ -368,40 +368,28 @@ impl UIContext {
 
             // TODO: are there times when we'd want a different strategy? e.g. when size of element is smaller than size of changes, use first strategy?
 
-            let pixel_positions = if doing_full_redraw || elements_requesting_redraw.contains(&id) {
-                (rect.y..=(rect.y + rect.height as i16))
-                    .flat_map(|y| {
+            let pixel_positions: Box<dyn Iterator<Item = (u8, u8)>> =
+                if doing_full_redraw || elements_requesting_redraw.contains(&id) {
+                    Box::new((rect.y..=(rect.y + rect.height as i16)).flat_map(|y| {
                         (rect.x..=(rect.x + rect.width as i16)).map(move |x| (x as u8, y as u8))
-                    })
-                    .collect()
-            } else {
-                pixels_needing_redraw
-                    .iter()
-                    .filter_map(|(x, y)| {
+                    }))
+                } else {
+                    Box::new(pixels_needing_redraw.iter().filter_map(|(x, y)| {
                         if rect.contains_point(*x as i16, *y as i16) {
                             Some((*x, *y))
                         } else {
                             None
                         }
-                    })
-                    .collect::<Vec<_>>()
-            };
-            // we clone because rust is a deeply unserious language
-            let ppc = pixel_positions.clone();
+                    }))
+                };
 
-            let pixel_positions_element_space = pixel_positions
-                .into_iter()
-                .map(|(x, y)| ((x as i16 - rect.x) as u8, (y as i16 - rect.y) as u8))
-                .collect::<Vec<_>>();
-
-            for (pixel, (x, y)) in el
-                .get_pixels(self, Box::new(pixel_positions_element_space.into_iter()))
-                .zip(ppc)
-            {
+            for (x, y) in pixel_positions {
                 let idx = (y as usize) * (SCREEN_WIDTH as usize) + (x as usize);
                 let byte_idx = idx / 8;
                 let bit_idx = 7 - (idx % 8);
                 if byte_idx < self.screen_buffer.len() {
+                    let pixel =
+                        el.get_pixel(self, (x as i16 - rect.x) as u8, (y as i16 - rect.y) as u8);
                     if pixel != 0 {
                         self.screen_buffer[byte_idx] |= 1 << bit_idx;
                     } else {
@@ -418,11 +406,7 @@ impl UIContext {
 pub trait UIElement {
     fn mount_to_context(&self, ctx: &UIContext, id: usize);
     // Coordinates are in element space. width and height describes size of drawn region, not size of element
-    fn get_pixels(
-        &self,
-        ctx: &UIContext,
-        iterator: Box<dyn Iterator<Item = (u8, u8)>>,
-    ) -> Box<dyn Iterator<Item = u8>>;
+    fn get_pixel(&self, ctx: &UIContext, x: u8, y: u8) -> u8;
     fn get_bounding_rect(&self) -> BoundingRect;
     fn get_parent_id(&self) -> Option<usize>;
 }
@@ -475,44 +459,34 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
             ctx_borrowed.insert(id);
         });
     }
-    fn get_pixels(
-        &self,
-        ctx: &UIContext,
-        requested_pixels: Box<dyn Iterator<Item = (u8, u8)>>,
-    ) -> Box<dyn Iterator<Item = u8>> {
-        let text = self.text.peek();
+    fn get_pixel(&self, ctx: &UIContext, x: u8, y: u8) -> u8 {
+        let text = &self.text.peek();
         let font = &ctx.font;
         let char_width = 8 as usize;
         let char_height = 8 as usize;
 
-        let text = text.clone();
-        let iter = requested_pixels.map(|(x, y)| {
-            let value = text.clone();
-            if y as usize >= char_height {
-                return 0;
-            }
-            let y = y as usize;
-            let x = x as usize;
+        let y = y as usize;
+        let x = x as usize;
+        if y >= char_height {
+            return 0;
+        }
 
-            let char_idx = x / char_width;
-            let col = x % char_width;
-            let row = y % char_height;
+        let char_idx = x / char_width;
+        let col = x % char_width;
+        let row = y % char_height;
 
-            let c_option = value.chars().nth(char_idx);
-            if let Some(c) = c_option {
-                let glyph = font.get(c).unwrap_or_default();
-                let row_bits = glyph[row].reverse_bits();
-                if (row_bits & (1 << (7 - col))) != 0 {
-                    1
-                } else {
-                    0
-                }
+        let c_option = text.chars().nth(char_idx);
+        if let Some(c) = c_option {
+            let glyph = font.get(c).unwrap_or_default();
+            let row_bits = glyph[row].reverse_bits();
+            if (row_bits & (1 << (7 - col))) != 0 {
+                1
             } else {
                 0
             }
-        });
-
-        Box::new(iter.collect::<Vec<_>>().into_iter())
+        } else {
+            0
+        }
     }
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
@@ -540,13 +514,8 @@ impl RectUIElement {
 
 impl UIElement for RectUIElement {
     fn mount_to_context(&self, ctx: &UIContext, id: usize) {}
-    fn get_pixels(
-        &self,
-        ctx: &UIContext,
-        requested_pixels: Box<dyn Iterator<Item = (u8, u8)>>,
-    ) -> Box<dyn Iterator<Item = u8>> {
-        let color = self.color;
-        Box::new(requested_pixels.map(move |_| color))
+    fn get_pixel(&self, ctx: &UIContext, x: u8, y: u8) -> u8 {
+        self.color
     }
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
