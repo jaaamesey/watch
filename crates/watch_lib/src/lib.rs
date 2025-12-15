@@ -302,7 +302,8 @@ impl UIContext {
         }
     }
 
-    fn absolute_rect(&self, el: &dyn UIElement) -> BoundingRect {
+    fn calculate_absolute_rect(&self, el_id: usize) -> BoundingRect {
+        let el = self.elements.get(el_id).unwrap();
         let mut rect = el.get_bounding_rect();
         let mut curr_parent_id = el.get_parent_id();
         while let Some(parent_id) = curr_parent_id {
@@ -332,10 +333,9 @@ impl UIContext {
         let mut tracked_area: usize = 0;
         self.scratch_redraw_sources.clear();
         for id in elements_requesting_redraw.iter() {
-            let el = self.elements.get(*id).unwrap();
-            let rect = self.absolute_rect(el.as_ref());
+            let rect = self.calculate_absolute_rect(*id);
             tracked_area =
-                tracked_area.saturating_add((rect.width as usize + 1) * (rect.height as usize + 1));
+                tracked_area.saturating_add((rect.width as usize) * (rect.height as usize));
             self.scratch_redraw_sources.push(rect);
         }
 
@@ -347,8 +347,8 @@ impl UIContext {
             self.scratch_optimized_regions.push(BoundingRect {
                 x: 0,
                 y: 0,
-                width: SCREEN_WIDTH - 1,
-                height: SCREEN_HEIGHT - 1,
+                width: SCREEN_WIDTH,
+                height: SCREEN_HEIGHT,
             });
         } else {
             sweep_merge_rectangles(
@@ -360,43 +360,31 @@ impl UIContext {
             );
         }
 
-        for (id, el) in self
-            .elements
-            .data
-            .iter()
-            .enumerate()
-            .filter_map(|(i, maybe_el)| {
-                if let Some(el) = maybe_el {
-                    Some((i, el))
-                } else {
-                    None
-                }
-            })
-        {
-            let use_full_rect = doing_full_redraw || elements_requesting_redraw.contains(&id);
-
-            self.scratch_region_intersections.clear();
-            let rect = self.absolute_rect(el.as_ref());
-            if !use_full_rect {
-                for region in self.scratch_optimized_regions.iter() {
-                    if let Some(intersect) = region.intersection(&rect) {
-                        self.scratch_region_intersections.push(intersect);
-                    }
-                }
-                if self.scratch_region_intersections.is_empty() {
-                    continue;
-                }
-            }
-
-            let regions_iter: &[_] = if use_full_rect {
-                core::slice::from_ref(&rect)
-            } else {
-                &self.scratch_region_intersections
+        for (id, maybe_el) in self.elements.data.iter().enumerate() {
+            let Some(el) = maybe_el else {
+                continue;
             };
 
-            for region in regions_iter.iter() {
-                for y in region.y..=(region.y + region.height as i16) {
-                    for x in region.x..=(region.x + region.width as i16) {
+            let rect = self.calculate_absolute_rect(id);
+            let regions_iter: &[_] =
+                if doing_full_redraw || elements_requesting_redraw.contains(&id) {
+                    core::slice::from_ref(&rect)
+                } else {
+                    self.scratch_region_intersections.clear();
+                    for region in self.scratch_optimized_regions.iter() {
+                        if let Some(intersect) = region.intersection(&rect) {
+                            self.scratch_region_intersections.push(intersect);
+                        }
+                    }
+                    if self.scratch_region_intersections.is_empty() {
+                        continue;
+                    }
+                    &self.scratch_region_intersections
+                };
+
+            for region in regions_iter {
+                for y in region.y..(region.y + region.height as i16) {
+                    for x in region.x..(region.x + region.width as i16) {
                         let idx = (y as usize) * (SCREEN_WIDTH as usize) + (x as usize);
                         let byte_idx = idx / 8;
                         let bit_idx = 7 - (idx % 8);
@@ -473,8 +461,8 @@ impl BoundingRect {
 fn normalize_rect_to_screen(rect: &BoundingRect) -> Option<(i16, i16, i16, i16)> {
     let x0 = max(0, rect.x);
     let y0 = max(0, rect.y);
-    let x1 = min(SCREEN_WIDTH as i16, rect.x + rect.width as i16 + 1);
-    let y1 = min(SCREEN_HEIGHT as i16, rect.y + rect.height as i16 + 1);
+    let x1 = min(SCREEN_WIDTH as i16, rect.x + rect.width as i16);
+    let y1 = min(SCREEN_HEIGHT as i16, rect.y + rect.height as i16);
 
     if x0 >= x1 || y0 >= y1 {
         None
@@ -499,8 +487,8 @@ fn sweep_merge_rectangles(
             normalized.push(BoundingRect {
                 x: x0,
                 y: y0,
-                width: (x1 - x0 - 1) as u8,
-                height: (y1 - y0 - 1) as u8,
+                width: (x1 - x0) as u8,
+                height: (y1 - y0) as u8,
             });
             x_edges.push(x0);
             x_edges.push(x1);
@@ -526,10 +514,8 @@ fn sweep_merge_rectangles(
 
         y_spans.clear();
         for rect in normalized.iter() {
-            let rx0 = rect.x;
-            let rx1 = rect.x + rect.width as i16 + 1;
-            if rx0 <= x_start && rx1 >= x_end {
-                y_spans.push((rect.y, rect.y + rect.height as i16 + 1));
+            if rect.x <= x_start && rect.x + rect.width as i16 >= x_end {
+                y_spans.push((rect.y, rect.y + rect.height as i16));
             }
         }
 
@@ -547,8 +533,8 @@ fn sweep_merge_rectangles(
                 out.push(BoundingRect {
                     x: x_start,
                     y: current_span.0,
-                    width: (x_end - x_start - 1) as u8,
-                    height: (current_span.1 - current_span.0 - 1) as u8,
+                    width: (x_end - x_start) as u8,
+                    height: (current_span.1 - current_span.0) as u8,
                 });
                 current_span = *span;
             }
@@ -557,8 +543,8 @@ fn sweep_merge_rectangles(
         out.push(BoundingRect {
             x: x_start,
             y: current_span.0,
-            width: (x_end - x_start - 1) as u8,
-            height: (current_span.1 - current_span.0 - 1) as u8,
+            width: (x_end - x_start) as u8,
+            height: (current_span.1 - current_span.0) as u8,
         });
     }
 }
@@ -642,8 +628,8 @@ impl RectUIElement {
 }
 
 impl UIElement for RectUIElement {
-    fn mount_to_context(&self, ctx: &UIContext, id: usize) {}
-    fn get_pixel(&self, ctx: &UIContext, x: u8, y: u8) -> u8 {
+    fn mount_to_context(&self, _ctx: &UIContext, _id: usize) {}
+    fn get_pixel(&self, _ctx: &UIContext, _x: u8, _y: u8) -> u8 {
         self.color
     }
     fn get_bounding_rect(&self) -> BoundingRect {
