@@ -103,7 +103,7 @@ fn main() {
         BoundingRect {
             x: 0,
             y: 100,
-            width: 100,
+            width: 200,
             height: 20,
         },
         root_id,
