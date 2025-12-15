@@ -5,6 +5,7 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::cmp::{max, min};
 use font8x8::UnicodeFonts;
 use hashbrown::HashSet;
 
@@ -189,7 +190,7 @@ impl<T: Clone + PartialEq, Deps: Clone, F: Clone + Fn(Deps) -> T> Observable<T>
         data.listeners.len() - 1
     }
 
-    fn unsubscribe(&self, id: usize) {
+    fn unsubscribe(&self, _id: usize) {
         //todo!()
     }
 }
@@ -274,6 +275,13 @@ pub struct UIContext {
     pub elements_requesting_redraw: Rc<RefCell<HashSet<usize>>>,
     font: font8x8::unicode::BasicFonts,
     screen_buffer: Vec<u8>,
+    // Scratch buffers to avoid per-frame allocations
+    scratch_redraw_sources: Vec<BoundingRect>,
+    scratch_optimized_regions: Vec<BoundingRect>,
+    scratch_sweep_normalized: Vec<BoundingRect>,
+    scratch_sweep_x_edges: Vec<i16>,
+    scratch_sweep_y_spans: Vec<(i16, i16)>,
+    scratch_region_intersections: Vec<BoundingRect>,
 }
 
 impl UIContext {
@@ -285,8 +293,28 @@ impl UIContext {
             elements_requesting_redraw: Rc::new(RefCell::new(HashSet::with_capacity(64))),
             font,
             screen_buffer: alloc::vec![0 as u8; (SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize) / 8],
+            scratch_redraw_sources: Vec::with_capacity(64),
+            scratch_optimized_regions: Vec::with_capacity(64),
+            scratch_sweep_normalized: Vec::with_capacity(64),
+            scratch_sweep_x_edges: Vec::with_capacity(128),
+            scratch_sweep_y_spans: Vec::with_capacity(128),
+            scratch_region_intersections: Vec::with_capacity(64),
         }
     }
+
+    fn absolute_rect(&self, el: &dyn UIElement) -> BoundingRect {
+        let mut rect = el.get_bounding_rect();
+        let mut curr_parent_id = el.get_parent_id();
+        while let Some(parent_id) = curr_parent_id {
+            let parent_el = self.elements.get(parent_id).unwrap();
+            let parent_rect = parent_el.get_bounding_rect();
+            rect.x += parent_rect.x;
+            rect.y += parent_rect.y;
+            curr_parent_id = parent_el.get_parent_id();
+        }
+        rect
+    }
+
     pub fn mount<El: UIElement + 'static>(&mut self, element: El) -> usize {
         let id = self.elements.add(Box::new(element));
         self.elements_requesting_redraw.borrow_mut().insert(id);
@@ -300,33 +328,36 @@ impl UIContext {
     pub fn handle_draw_requests(&mut self) {
         let mut elements_requesting_redraw = self.elements_requesting_redraw.borrow_mut();
         // A quarter of the screen is the largest amount that can be partially updated - otherwise, we do a full update
-        let mut pixels_needing_redraw = HashSet::<(u8, u8)>::with_capacity(
-            (SCREEN_HEIGHT as usize * SCREEN_WIDTH as usize) / 4,
-        );
-
-        let mut doing_full_redraw = elements_requesting_redraw.len() > 16;
-
-        'outermost: for id in elements_requesting_redraw.iter() {
+        let partial_area_limit = (SCREEN_HEIGHT as usize * SCREEN_WIDTH as usize) / 4;
+        let mut tracked_area: usize = 0;
+        self.scratch_redraw_sources.clear();
+        for id in elements_requesting_redraw.iter() {
             let el = self.elements.get(*id).unwrap();
-            // TODO: make parent context getting into a shared function
-            let mut rect = el.get_bounding_rect();
-            let mut curr_parent_id = el.get_parent_id();
-            while let Some(parent_id) = curr_parent_id {
-                let parent_el = self.elements.get(parent_id).unwrap();
-                let parent_rect = parent_el.get_bounding_rect();
-                rect.x += parent_rect.x;
-                rect.y += parent_rect.y;
-                curr_parent_id = parent_el.get_parent_id();
-            }
-            for y in rect.y..=(rect.y + rect.height as i16) {
-                for x in rect.x..=(rect.x + rect.width as i16) {
-                    if pixels_needing_redraw.len() >= pixels_needing_redraw.capacity() {
-                        doing_full_redraw = true;
-                        break 'outermost;
-                    }
-                    pixels_needing_redraw.insert((x as u8, y as u8));
-                }
-            }
+            let rect = self.absolute_rect(el.as_ref());
+            tracked_area =
+                tracked_area.saturating_add((rect.width as usize + 1) * (rect.height as usize + 1));
+            self.scratch_redraw_sources.push(rect);
+        }
+
+        let doing_full_redraw =
+            elements_requesting_redraw.len() > 16 || tracked_area > partial_area_limit;
+
+        self.scratch_optimized_regions.clear();
+        if doing_full_redraw {
+            self.scratch_optimized_regions.push(BoundingRect {
+                x: 0,
+                y: 0,
+                width: SCREEN_WIDTH - 1,
+                height: SCREEN_HEIGHT - 1,
+            });
+        } else {
+            sweep_merge_rectangles(
+                &self.scratch_redraw_sources,
+                &mut self.scratch_optimized_regions,
+                &mut self.scratch_sweep_normalized,
+                &mut self.scratch_sweep_x_edges,
+                &mut self.scratch_sweep_y_spans,
+            );
         }
 
         for (id, el) in self
@@ -342,58 +373,45 @@ impl UIContext {
                 }
             })
         {
-            let mut rect = el.get_bounding_rect();
-            let mut curr_parent_id = el.get_parent_id();
-            while let Some(parent_id) = curr_parent_id {
-                let parent_el = self.elements.get(parent_id).unwrap();
-                let parent_rect = parent_el.get_bounding_rect();
-                rect.x += parent_rect.x;
-                rect.y += parent_rect.y;
-                curr_parent_id = parent_el.get_parent_id();
+            let use_full_rect = doing_full_redraw || elements_requesting_redraw.contains(&id);
+
+            self.scratch_region_intersections.clear();
+            let rect = self.absolute_rect(el.as_ref());
+            if !use_full_rect {
+                for region in self.scratch_optimized_regions.iter() {
+                    if let Some(intersect) = region.intersection(&rect) {
+                        self.scratch_region_intersections.push(intersect);
+                    }
+                }
+                if self.scratch_region_intersections.is_empty() {
+                    continue;
+                }
             }
 
-            if !doing_full_redraw
-                && !elements_requesting_redraw.contains(&id)
-                && !elements_requesting_redraw.iter().any(|other_id| {
-                    return self
-                        .elements
-                        .get(*other_id)
-                        .unwrap()
-                        .get_bounding_rect()
-                        .overlaps(&rect);
-                })
-            {
-                continue;
-            }
+            let regions_iter: &[_] = if use_full_rect {
+                core::slice::from_ref(&rect)
+            } else {
+                &self.scratch_region_intersections
+            };
 
-            // TODO: are there times when we'd want a different strategy? e.g. when size of element is smaller than size of changes, use first strategy?
-
-            let pixel_positions: Box<dyn Iterator<Item = (u8, u8)>> =
-                if doing_full_redraw || elements_requesting_redraw.contains(&id) {
-                    Box::new((rect.y..=(rect.y + rect.height as i16)).flat_map(|y| {
-                        (rect.x..=(rect.x + rect.width as i16)).map(move |x| (x as u8, y as u8))
-                    }))
-                } else {
-                    Box::new(pixels_needing_redraw.iter().filter_map(|(x, y)| {
-                        if rect.contains_point(*x as i16, *y as i16) {
-                            Some((*x, *y))
-                        } else {
-                            None
+            for region in regions_iter.iter() {
+                for y in region.y..=(region.y + region.height as i16) {
+                    for x in region.x..=(region.x + region.width as i16) {
+                        let idx = (y as usize) * (SCREEN_WIDTH as usize) + (x as usize);
+                        let byte_idx = idx / 8;
+                        let bit_idx = 7 - (idx % 8);
+                        if byte_idx < self.screen_buffer.len() {
+                            let pixel = el.get_pixel(
+                                self,
+                                (x as i16 - rect.x) as u8,
+                                (y as i16 - rect.y) as u8,
+                            );
+                            if pixel != 0 {
+                                self.screen_buffer[byte_idx] |= 1 << bit_idx;
+                            } else {
+                                self.screen_buffer[byte_idx] &= !(1 << bit_idx);
+                            }
                         }
-                    }))
-                };
-
-            for (x, y) in pixel_positions {
-                let idx = (y as usize) * (SCREEN_WIDTH as usize) + (x as usize);
-                let byte_idx = idx / 8;
-                let bit_idx = 7 - (idx % 8);
-                if byte_idx < self.screen_buffer.len() {
-                    let pixel =
-                        el.get_pixel(self, (x as i16 - rect.x) as u8, (y as i16 - rect.y) as u8);
-                    if pixel != 0 {
-                        self.screen_buffer[byte_idx] |= 1 << bit_idx;
-                    } else {
-                        self.screen_buffer[byte_idx] &= !(1 << bit_idx);
                     }
                 }
             }
@@ -431,6 +449,117 @@ impl BoundingRect {
             && self.x + self.width as i16 > other.x
             && self.y < other.y + other.height as i16
             && self.y + self.height as i16 > other.y
+    }
+
+    pub fn intersection(&self, other: &BoundingRect) -> Option<BoundingRect> {
+        let x0 = core::cmp::max(self.x, other.x);
+        let y0 = core::cmp::max(self.y, other.y);
+        let x1 = core::cmp::min(self.x + self.width as i16, other.x + other.width as i16);
+        let y1 = core::cmp::min(self.y + self.height as i16, other.y + other.height as i16);
+
+        if x0 > x1 || y0 > y1 {
+            None
+        } else {
+            Some(BoundingRect {
+                x: x0,
+                y: y0,
+                width: (x1 - x0) as u8,
+                height: (y1 - y0) as u8,
+            })
+        }
+    }
+}
+
+fn normalize_rect_to_screen(rect: &BoundingRect) -> Option<(i16, i16, i16, i16)> {
+    let x0 = max(0, rect.x);
+    let y0 = max(0, rect.y);
+    let x1 = min(SCREEN_WIDTH as i16, rect.x + rect.width as i16 + 1);
+    let y1 = min(SCREEN_HEIGHT as i16, rect.y + rect.height as i16 + 1);
+
+    if x0 >= x1 || y0 >= y1 {
+        None
+    } else {
+        Some((x0, x1, y0, y1))
+    }
+}
+
+fn sweep_merge_rectangles(
+    rects: &[BoundingRect],
+    out: &mut Vec<BoundingRect>,
+    normalized: &mut Vec<BoundingRect>,
+    x_edges: &mut Vec<i16>,
+    y_spans: &mut Vec<(i16, i16)>,
+) {
+    out.clear();
+    normalized.clear();
+    x_edges.clear();
+
+    for rect in rects {
+        if let Some((x0, x1, y0, y1)) = normalize_rect_to_screen(rect) {
+            normalized.push(BoundingRect {
+                x: x0,
+                y: y0,
+                width: (x1 - x0 - 1) as u8,
+                height: (y1 - y0 - 1) as u8,
+            });
+            x_edges.push(x0);
+            x_edges.push(x1);
+        }
+    }
+
+    if normalized.is_empty() {
+        return;
+    }
+
+    x_edges.sort_unstable();
+    x_edges.dedup();
+
+    out.clear();
+    y_spans.clear();
+
+    for pair in x_edges.windows(2) {
+        let x_start = pair[0];
+        let x_end = pair[1];
+        if x_start >= x_end {
+            continue;
+        }
+
+        y_spans.clear();
+        for rect in normalized.iter() {
+            let rx0 = rect.x;
+            let rx1 = rect.x + rect.width as i16 + 1;
+            if rx0 <= x_start && rx1 >= x_end {
+                y_spans.push((rect.y, rect.y + rect.height as i16 + 1));
+            }
+        }
+
+        if y_spans.is_empty() {
+            continue;
+        }
+
+        y_spans.sort_by_key(|(start, _)| *start);
+
+        let mut current_span = y_spans[0];
+        for span in y_spans.iter().skip(1) {
+            if span.0 <= current_span.1 {
+                current_span.1 = max(current_span.1, span.1);
+            } else {
+                out.push(BoundingRect {
+                    x: x_start,
+                    y: current_span.0,
+                    width: (x_end - x_start - 1) as u8,
+                    height: (current_span.1 - current_span.0 - 1) as u8,
+                });
+                current_span = *span;
+            }
+        }
+
+        out.push(BoundingRect {
+            x: x_start,
+            y: current_span.0,
+            width: (x_end - x_start - 1) as u8,
+            height: (current_span.1 - current_span.0 - 1) as u8,
+        });
     }
 }
 
