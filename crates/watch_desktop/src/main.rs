@@ -54,27 +54,31 @@ fn main() {
     });
 
     let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
-    let mut parent = RectUIElement::new(
-        BoundingRect {
-            x: 80,
-            y: 80,
-            width: 100,
-            height: 100,
-        },
-        1,
+    // TODO: figure out why it doesn't let this be inlined
+    let parent_id = ui_context.mount(
+        0,
+        RectUIElement::new(
+            BoundingRect {
+                x: 80,
+                y: 80,
+                width: 100,
+                height: 100,
+            },
+            1,
+        ),
     );
-    let el_id = ui_context.mount(TextUIElement::new(
-        &toggled,
-        BoundingRect {
-            x: 110,
-            y: 0,
-            width: 64,
-            height: 20,
-        },
-    ));
-    parent.add_child(&mut ui_context, el_id);
-    let parent_id = ui_context.mount(parent);
-    ui_context.add_to_root(parent_id);
+    ui_context.mount(
+        parent_id,
+        TextUIElement::new(
+            &toggled,
+            BoundingRect {
+                x: 10,
+                y: 0,
+                width: 64,
+                height: 20,
+            },
+        ),
+    );
 
     // set_pixel(&mut screen_buffer, 1, 1, 1);
     // set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);

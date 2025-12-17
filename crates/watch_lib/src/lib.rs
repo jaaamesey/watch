@@ -105,10 +105,18 @@ impl UIContext {
     pub fn add_to_root(&mut self, element_id: usize) {
         let root_ptr: *mut dyn UIElement = &mut **(self.elements.get_mut(0).unwrap());
         unsafe {
-            (*root_ptr).add_child(self, element_id);
+            (*root_ptr).insert_child_at_end(self, element_id);
         }
     }
-    pub fn mount<El: UIElement + 'static>(&mut self, element: El) -> usize {
+    pub fn mount<El: UIElement + 'static>(&mut self, parent_id: usize, el: El) -> usize {
+        let parent_ptr: *mut dyn UIElement = &mut **(self.elements.get_mut(parent_id).unwrap());
+        unsafe {
+            let el_id = self.mount_internal(el);
+            (*parent_ptr).insert_child_at_end(self, el_id);
+            el_id
+        }
+    }
+    fn mount_internal<El: UIElement + 'static>(&mut self, element: El) -> usize {
         let id = self.elements.add(Box::new(element));
         self.elements_requesting_redraw.borrow_mut().insert(id);
         let el = self.elements.get(id).unwrap();
@@ -269,7 +277,7 @@ pub trait UIElement {
     fn get_first_child_id(&self) -> usize;
     fn get_next_element_id(&self) -> usize;
     fn set_next_element_id(&mut self, id: usize);
-    fn add_child(&mut self, ctx: &mut UIContext, id: usize);
+    fn insert_child_at_end(&mut self, ctx: &mut UIContext, id: usize);
 }
 
 #[derive(Clone, Copy)]
@@ -470,7 +478,7 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
     fn set_next_element_id(&mut self, id: usize) {
         self.next_element_id = id
     }
-    fn add_child(&mut self, ctx: &mut UIContext, id: usize) {
+    fn insert_child_at_end(&mut self, ctx: &mut UIContext, id: usize) {
         panic!("TextUIElement does not support children");
     }
 }
@@ -510,7 +518,7 @@ impl UIElement for RectUIElement {
     fn set_next_element_id(&mut self, id: usize) {
         self.next_element_id = id
     }
-    fn add_child(&mut self, ui_context: &mut UIContext, element_id: usize) {
+    fn insert_child_at_end(&mut self, ui_context: &mut UIContext, element_id: usize) {
         if self.first_child_id == 0 {
             self.first_child_id = element_id;
             return;
