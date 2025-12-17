@@ -68,7 +68,22 @@ impl UIContext {
     pub fn new(font: font8x8::unicode::BasicFonts) -> UIContext {
         UIContext {
             elements: ArbitraryIdStore {
-                data: Vec::with_capacity(64),
+                data: {
+                    let mut vec: Vec<Option<Box<dyn UIElement>>> = Vec::with_capacity(64);
+                    let el = RectUIElement::new(
+                        0,
+                        BoundingRect {
+                            x: 0,
+                            y: 0,
+                            width: SCREEN_WIDTH,
+                            height: SCREEN_HEIGHT,
+                        },
+                        // TODO: make invisible
+                        0,
+                    );
+                    vec.push(Some(Box::new(el)));
+                    vec
+                },
             },
             elements_requesting_redraw: Rc::new(RefCell::new(HashSet::with_capacity(64))),
             font,
@@ -86,8 +101,8 @@ impl UIContext {
         let el = self.elements.get(el_id).unwrap();
         let mut rect = el.get_bounding_rect();
         let mut curr_parent_id = el.get_parent_id();
-        while let Some(parent_id) = curr_parent_id {
-            let parent_el = self.elements.get(parent_id).unwrap();
+        while curr_parent_id != 0 {
+            let parent_el = self.elements.get(curr_parent_id).unwrap();
             let parent_rect = parent_el.get_bounding_rect();
             rect.x += parent_rect.x;
             rect.y += parent_rect.y;
@@ -194,7 +209,7 @@ pub trait UIElement {
     // Coordinates are in element space. width and height describes size of drawn region, not size of element
     fn get_pixel(&self, ctx: &UIContext, x: u8, y: u8) -> u8;
     fn get_bounding_rect(&self) -> BoundingRect;
-    fn get_parent_id(&self) -> Option<usize>;
+    fn get_parent_id(&self) -> usize;
 }
 
 #[derive(Clone, Copy)]
@@ -386,19 +401,19 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
     }
-    fn get_parent_id(&self) -> Option<usize> {
-        Some(self.parent_id)
+    fn get_parent_id(&self) -> usize {
+        self.parent_id
     }
 }
 
 pub struct RectUIElement {
-    parent_id: Option<usize>,
+    parent_id: usize,
     rect: BoundingRect,
     color: u8,
 }
 
 impl RectUIElement {
-    pub fn new(parent_id: Option<usize>, rect: BoundingRect, color: u8) -> RectUIElement {
+    pub fn new(parent_id: usize, rect: BoundingRect, color: u8) -> RectUIElement {
         RectUIElement {
             rect,
             parent_id,
@@ -415,7 +430,7 @@ impl UIElement for RectUIElement {
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
     }
-    fn get_parent_id(&self) -> Option<usize> {
+    fn get_parent_id(&self) -> usize {
         self.parent_id
     }
 }

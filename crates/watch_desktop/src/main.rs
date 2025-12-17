@@ -55,7 +55,7 @@ fn main() {
 
     let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
     let root_id = ui_context.mount(RectUIElement::new(
-        None,
+        0,
         BoundingRect {
             x: 0,
             y: 0,
@@ -75,7 +75,7 @@ fn main() {
         root_id,
     ));
     ui_context.mount(RectUIElement::new(
-        None,
+        0,
         BoundingRect {
             x: 80,
             y: 80,
