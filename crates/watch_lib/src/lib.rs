@@ -1,4 +1,4 @@
-#![no_std]
+// #![no_std]
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
@@ -48,6 +48,13 @@ impl<V> ArbitraryIdStore<V> {
             Some(&self.data[id].as_ref().unwrap())
         }
     }
+    fn get_mut(&mut self, id: usize) -> Option<&mut V> {
+        if self.data.get(id).unwrap_or(&None).is_none() {
+            None
+        } else {
+            Some(self.data[id].as_mut().unwrap())
+        }
+    }
 }
 
 pub struct UIContext {
@@ -71,7 +78,6 @@ impl UIContext {
                 data: {
                     let mut vec: Vec<Option<Box<dyn UIElement>>> = Vec::with_capacity(64);
                     let el = RectUIElement::new(
-                        0,
                         BoundingRect {
                             x: 0,
                             y: 0,
@@ -96,21 +102,12 @@ impl UIContext {
             scratch_region_intersections: Vec::with_capacity(64),
         }
     }
-
-    fn calculate_absolute_rect(&self, el_id: usize) -> BoundingRect {
-        let el = self.elements.get(el_id).unwrap();
-        let mut rect = el.get_bounding_rect();
-        let mut curr_parent_id = el.get_parent_id();
-        while curr_parent_id != 0 {
-            let parent_el = self.elements.get(curr_parent_id).unwrap();
-            let parent_rect = parent_el.get_bounding_rect();
-            rect.x += parent_rect.x;
-            rect.y += parent_rect.y;
-            curr_parent_id = parent_el.get_parent_id();
+    pub fn add_to_root(&mut self, element_id: usize) {
+        let root_ptr: *mut dyn UIElement = &mut **(self.elements.get_mut(0).unwrap());
+        unsafe {
+            (*root_ptr).add_child(self, element_id);
         }
-        rect
     }
-
     pub fn mount<El: UIElement + 'static>(&mut self, element: El) -> usize {
         let id = self.elements.add(Box::new(element));
         self.elements_requesting_redraw.borrow_mut().insert(id);
@@ -122,17 +119,67 @@ impl UIContext {
         &self.screen_buffer
     }
     pub fn handle_draw_requests(&mut self) {
+        self.scratch_redraw_sources.clear();
+
         let mut elements_requesting_redraw = self.elements_requesting_redraw.borrow_mut();
         // A quarter of the screen is the largest amount that can be partially updated - otherwise, we do a full update
         let partial_area_limit = (SCREEN_HEIGHT as usize * SCREEN_WIDTH as usize) / 4;
         let mut tracked_area: usize = 0;
-        self.scratch_redraw_sources.clear();
-        for id in elements_requesting_redraw.iter() {
-            let rect = self.calculate_absolute_rect(*id);
-            tracked_area =
-                tracked_area.saturating_add((rect.width as usize) * (rect.height as usize));
-            self.scratch_redraw_sources.push(rect);
-        }
+
+        let ordered_elements = {
+            struct ElementTreeNode {
+                element_id: usize,
+                global_x: i16,
+                global_y: i16,
+            }
+            let mut ordered_elements =
+                Vec::<ElementTreeNode>::with_capacity(self.elements.data.len());
+
+            struct ElementStackEntry {
+                element_id: usize,
+                parent_global_x: i16,
+                parent_global_y: i16,
+            }
+            let mut dfs_stack = Vec::<ElementStackEntry>::new();
+            dfs_stack.push(ElementStackEntry {
+                element_id: 0,
+                parent_global_x: 0,
+                parent_global_y: 0,
+            });
+            while !dfs_stack.is_empty() {
+                let curr_entry = dfs_stack.pop().unwrap();
+                let mut curr_id = curr_entry.element_id;
+                let el = self.elements.get(curr_id).unwrap();
+                let rect = el.get_bounding_rect();
+                let global_x = curr_entry.parent_global_x + rect.x;
+                let global_y = curr_entry.parent_global_y + rect.y;
+                ordered_elements.push(ElementTreeNode {
+                    element_id: curr_id,
+                    global_x,
+                    global_y,
+                });
+                if elements_requesting_redraw.contains(&curr_id) {
+                    let mut global_rect = rect;
+                    global_rect.x = global_x;
+                    global_rect.y = global_y;
+                    tracked_area = tracked_area.saturating_add(
+                        (global_rect.width as usize) * (global_rect.height as usize),
+                    );
+                    self.scratch_redraw_sources.push(global_rect);
+                }
+                curr_id = el.get_first_child_id();
+                while curr_id != 0 {
+                    dfs_stack.push(ElementStackEntry {
+                        element_id: curr_id,
+                        parent_global_x: global_x,
+                        parent_global_y: global_y,
+                    });
+                    curr_id = self.elements.get(curr_id).unwrap().get_next_element_id();
+                }
+            }
+
+            ordered_elements
+        };
 
         let doing_full_redraw =
             elements_requesting_redraw.len() > 16 || tracked_area > partial_area_limit;
@@ -155,12 +202,16 @@ impl UIContext {
             );
         }
 
-        for (id, maybe_el) in self.elements.data.iter().enumerate() {
-            let Some(el) = maybe_el else {
-                continue;
+        for el_node in ordered_elements {
+            let id = el_node.element_id;
+            let el = self.elements.get(id).unwrap();
+            let local_rect = el.get_bounding_rect();
+            let rect = BoundingRect {
+                x: el_node.global_x,
+                y: el_node.global_y,
+                width: local_rect.width,
+                height: local_rect.height,
             };
-
-            let rect = self.calculate_absolute_rect(id);
             let regions_iter: &[_] =
                 if doing_full_redraw || elements_requesting_redraw.contains(&id) {
                     core::slice::from_ref(&rect)
@@ -178,8 +229,12 @@ impl UIContext {
                 };
 
             for region in regions_iter {
-                for y in region.y..(region.y + region.height as i16) {
-                    for x in region.x..(region.x + region.width as i16) {
+                for y in
+                    region.y.max(0)..(region.y + region.height as i16).min(SCREEN_HEIGHT as i16)
+                {
+                    for x in
+                        region.x.max(0)..(region.x + region.width as i16).min(SCREEN_WIDTH as i16)
+                    {
                         let idx = (y as usize) * (SCREEN_WIDTH as usize) + (x as usize);
                         let byte_idx = idx / 8;
                         let bit_idx = 7 - (idx % 8);
@@ -204,12 +259,17 @@ impl UIContext {
     }
 }
 
+// TODO: a lot of these functions should be internal only
 pub trait UIElement {
     fn mount_to_context(&self, ctx: &UIContext, id: usize);
     // Coordinates are in element space. width and height describes size of drawn region, not size of element
     fn get_pixel(&self, ctx: &UIContext, x: u8, y: u8) -> u8;
     fn get_bounding_rect(&self) -> BoundingRect;
-    fn get_parent_id(&self) -> usize;
+    // 0 means null here
+    fn get_first_child_id(&self) -> usize;
+    fn get_next_element_id(&self) -> usize;
+    fn set_next_element_id(&mut self, id: usize);
+    fn add_child(&mut self, ctx: &mut UIContext, id: usize);
 }
 
 #[derive(Clone, Copy)]
@@ -347,15 +407,15 @@ fn sweep_merge_rectangles(
 pub struct TextUIElement<TextObservable: Observable<String>> {
     text: TextObservable,
     rect: BoundingRect,
-    parent_id: usize,
+    next_element_id: usize,
 }
 
 impl<TO: Observable<String>> TextUIElement<TO> {
-    pub fn new(text: &TO, rect: BoundingRect, parent_id: usize) -> TextUIElement<TO> {
+    pub fn new(text: &TO, rect: BoundingRect) -> TextUIElement<TO> {
         TextUIElement {
             text: text.clone(),
             rect,
-            parent_id,
+            next_element_id: 0,
         }
     }
 }
@@ -401,23 +461,34 @@ impl<TO: Observable<String>> UIElement for TextUIElement<TO> {
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
     }
-    fn get_parent_id(&self) -> usize {
-        self.parent_id
+    fn get_first_child_id(&self) -> usize {
+        0
+    }
+    fn get_next_element_id(&self) -> usize {
+        self.next_element_id
+    }
+    fn set_next_element_id(&mut self, id: usize) {
+        self.next_element_id = id
+    }
+    fn add_child(&mut self, ctx: &mut UIContext, id: usize) {
+        panic!("TextUIElement does not support children");
     }
 }
 
 pub struct RectUIElement {
-    parent_id: usize,
     rect: BoundingRect,
     color: u8,
+    next_element_id: usize,
+    first_child_id: usize,
 }
 
 impl RectUIElement {
-    pub fn new(parent_id: usize, rect: BoundingRect, color: u8) -> RectUIElement {
+    pub fn new(rect: BoundingRect, color: u8) -> RectUIElement {
         RectUIElement {
             rect,
-            parent_id,
             color,
+            next_element_id: 0,
+            first_child_id: 0,
         }
     }
 }
@@ -430,7 +501,35 @@ impl UIElement for RectUIElement {
     fn get_bounding_rect(&self) -> BoundingRect {
         self.rect
     }
-    fn get_parent_id(&self) -> usize {
-        self.parent_id
+    fn get_first_child_id(&self) -> usize {
+        self.first_child_id
+    }
+    fn get_next_element_id(&self) -> usize {
+        self.next_element_id
+    }
+    fn set_next_element_id(&mut self, id: usize) {
+        self.next_element_id = id
+    }
+    fn add_child(&mut self, ui_context: &mut UIContext, element_id: usize) {
+        if self.first_child_id == 0 {
+            self.first_child_id = element_id;
+            return;
+        }
+        let mut curr_child_id = self.first_child_id;
+        loop {
+            if curr_child_id == 0 {
+                break;
+            }
+            curr_child_id = ui_context
+                .elements
+                .get(curr_child_id)
+                .unwrap()
+                .get_next_element_id();
+        }
+        ui_context
+            .elements
+            .get_mut(curr_child_id)
+            .unwrap()
+            .set_next_element_id(element_id);
     }
 }

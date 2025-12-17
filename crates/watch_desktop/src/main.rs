@@ -2,7 +2,7 @@ use font8x8::{self};
 use minifb;
 use watch_lib::{
     self, BoundingRect, Observable, RectUIElement, SCREEN_HEIGHT, SCREEN_WIDTH, Signal,
-    TextUIElement, UIContext, derived, derived2,
+    TextUIElement, UIContext, UIElement, derived, derived2,
 };
 
 fn main() {
@@ -54,28 +54,7 @@ fn main() {
     });
 
     let mut ui_context = UIContext::new(font8x8::unicode::BasicFonts::new());
-    let root_id = ui_context.mount(RectUIElement::new(
-        0,
-        BoundingRect {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        },
-        1,
-    ));
-    ui_context.mount(TextUIElement::new(
-        &toggled,
-        BoundingRect {
-            x: 90,
-            y: 76,
-            width: 65,
-            height: 20,
-        },
-        root_id,
-    ));
-    ui_context.mount(RectUIElement::new(
-        0,
+    let mut parent = RectUIElement::new(
         BoundingRect {
             x: 80,
             y: 80,
@@ -83,28 +62,19 @@ fn main() {
             height: 100,
         },
         1,
-    ));
-    ui_context.mount(TextUIElement::new(
+    );
+    let el_id = ui_context.mount(TextUIElement::new(
         &toggled,
         BoundingRect {
-            x: 100,
-            y: 100,
-            width: 100,
+            x: 110,
+            y: 0,
+            width: 64,
             height: 20,
         },
-        root_id,
     ));
-    let c = derived(&toggled, |_| "should be above".to_string());
-    ui_context.mount(TextUIElement::new(
-        &c,
-        BoundingRect {
-            x: 0,
-            y: 100,
-            width: 200,
-            height: 20,
-        },
-        root_id,
-    ));
+    parent.add_child(&mut ui_context, el_id);
+    let parent_id = ui_context.mount(parent);
+    ui_context.add_to_root(parent_id);
 
     // set_pixel(&mut screen_buffer, 1, 1, 1);
     // set_rect(&mut screen_buffer, 10, 10, 100, 100, 1);
