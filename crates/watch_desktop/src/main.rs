@@ -1,12 +1,9 @@
 use font8x8::{self};
 use minifb;
 use watch_lib::{
-    self, BoundingRect, Observable, RectUIElement, Signal, TextUIElement, UIContext, derived,
-    derived2,
+    self, BoundingRect, Observable, RectUIElement, SCREEN_HEIGHT, SCREEN_WIDTH, Signal,
+    TextUIElement, UIContext, derived, derived2,
 };
-
-const SCREEN_WIDTH: u8 = 200;
-const SCREEN_HEIGHT: u8 = 200;
 
 fn main() {
     let test_signal = Signal::new(0);
@@ -149,35 +146,5 @@ fn get_pixel_by_index(buffer: &[u8], i: usize) -> u8 {
         1
     } else {
         0
-    }
-}
-
-fn set_rect(buffer: &mut [u8], rect_x: u8, rect_y: u8, rect_width: u8, rect_height: u8, color: u8) {
-    let fill_color = if color == 0 { 0 } else { 1 };
-
-    for y in rect_y..(rect_y + rect_height) {
-        if y >= SCREEN_HEIGHT {
-            break;
-        }
-        for x in rect_x..(rect_x + rect_width) {
-            if x >= SCREEN_WIDTH {
-                break;
-            }
-            set_pixel(buffer, x, y, fill_color);
-        }
-    }
-}
-
-fn set_pixel(buffer: &mut [u8], x: u8, y: u8, color: u8) {
-    if x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT {
-        return;
-    }
-    let byte_index = y as usize * (SCREEN_WIDTH as usize / 8) + (x as usize / 8);
-    let bit_index = 7 - (x % 8);
-
-    if color == 1 {
-        buffer[byte_index] |= 1 << bit_index;
-    } else {
-        buffer[byte_index] &= !(1 << bit_index);
     }
 }
