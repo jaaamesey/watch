@@ -52,9 +52,9 @@ fn main() -> ! {
                 led_blue.set_state(PinState::High).unwrap();
             }
             LightState::Green => {
-                led_red.set_state(PinState::High).unwrap();
+                led_red.set_state(PinState::Low).unwrap();
                 led_green.set_state(PinState::Low).unwrap();
-                led_blue.set_state(PinState::High).unwrap();
+                led_blue.set_state(PinState::Low).unwrap();
             }
             LightState::Blue => {
                 led_red.set_state(PinState::High).unwrap();
