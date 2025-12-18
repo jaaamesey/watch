@@ -1,2 +1,2 @@
 [workspace]
-members = ["crates/watch_lib", "crates/watch_desktop"]
+members = ["crates/watch_lib", "crates/watch_desktop", "crates/watch_firmware"]

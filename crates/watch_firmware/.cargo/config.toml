@@ -1,0 +1,5 @@
+[target.thumbv7em-none-eabihf]
+runner = "hf2-cli --vid 0x2886 --pid 0x0044"
+
+[build]
+target = "thumbv7em-none-eabihf"
